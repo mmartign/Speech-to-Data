@@ -32,11 +32,11 @@ MODEL_NAME = "deepseek-r1:32b"
 KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
 COLLECTION = "#Treatment_Protocols\n"
 PROMPT = (
-    "Please begin by extracting the medical data from the following text and converting it into FHIR compliant JSON resource bundle.\n"
+    "Please, begin by extracting the medical data from the following text and converting it into FHIR compliant JSON resource bundle.\n"
     "After that, verify whether the operators have adhered to any of the attached protocols.\n\n"
 )
 PROMPT_NON_ENGLISH = (
-    "Please begin by translating the following Italian text into English.\n"
+    "Please, begin by translating the following Italian text into English.\n"
     "After that,  extract the medical data from the translated text and convert it into FHIR compliant JSON resource bundle..\n"
     "Finally, verify whether the operators have adhered to any of the attached protocols.\n\n"
 )
