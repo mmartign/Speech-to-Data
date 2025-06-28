@@ -82,7 +82,6 @@ def analyze_text(text):
             }
         )
 
-        my_file.write("\nResponse:\n")
         full_response = ""
 
         for chunk in response:
