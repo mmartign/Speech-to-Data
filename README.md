@@ -36,7 +36,7 @@ While individual components of Spazio IT's pipeline exist in the market, **the *
 
 1.  **Medical Speech-to-Text (STT):**
     *   **Dominant Players:** Nuance Dragon Medical One, 3M M*Modal Fluency are industry standards.
-    *   **Open Source:** Whisper (used by Spazio) is widely available.
+    *   **Open Source:** Whisper (used by Spazio IT) is widely available.
     *   *Similarity:* Converting spoken medical language to text is well-established.
 
 2.  **Structured Data Extraction (Clinical NLP):**
