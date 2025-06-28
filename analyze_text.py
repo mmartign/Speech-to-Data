@@ -27,7 +27,7 @@ from openai import OpenAI
 
 # Configuration
 OPENWEBUI_URL = "http://localhost:8080/api"
-API_KEY = "my-key"
+API_KEY = "sk-bae341e16b1048f5a94b305fe97337a0"
 MODEL_NAME = "deepseek-r1:32b"
 KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
 COLLECTION = "#Treatment_Protocols\n"
@@ -115,6 +115,7 @@ def main():
                 threading.Thread(target=analyze_text, args=(collected_text,)).start()
                 collected_text = ""
             else:
+                collected_text += line
                 print(f"Please wait, another analysis is currently running.")
         else:
             collected_text += line
