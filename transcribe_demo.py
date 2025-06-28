@@ -101,7 +101,8 @@ def main():
 
     # Start background listening
     recorder.listen_in_background(source, record_callback, phrase_time_limit=args.record_timeout)
-    print("Model loaded.\n")
+    if not args.pipe:
+        print("Model loaded.\n")
 
     # Main loop
     while True:
