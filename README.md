@@ -24,7 +24,7 @@ Reference protocols are indexed into an OpenWebUI vector database, allowing them
 The full pipeline runs on a single machine — which could be an industrial PC equipped with sufficient RAM and GPU.
 
 📂 **Open Source Scripts**
-Initial scripts for the core functionality are available here:
+Initial scripts for the core functionality (marked in cyan in the architecture) are available here:
 🔗 [github.com/mmartign/Speech-to-Data](https://github.com/mmartign/Speech-to-Data)
 
 🔬 **Early Stage**
