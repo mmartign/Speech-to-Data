@@ -29,15 +29,16 @@ from openai import OpenAI
 OPENWEBUI_URL = "http://localhost:8080/api"
 API_KEY = "sk-bae341e16b1048f5a94b305fe97337a0"
 MODEL_NAME = "deepseek-r1:32b"
-KNOWLEDGE_BASE_IDS = ["Treatment_Protocols"]  # The treatment protocols actually available
+KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
+COLLECTION = "#Treatment_Protocols\n"
 PROMPT = (
-    "Please begin by extracting the medical data from the following text and converting it into FHIR compliant notation. "
-    "After that, verify whether the operators have adhered to any of the attached protocols. \n\n"
+    "Please begin by extracting the medical data from the following text and converting it into FHIR compliant JSON resource bundle.\n"
+    "After that, verify whether the operators have adhered to any of the attached protocols.\n\n"
 )
 PROMPT_NON_ENGLISH = (
-    "Please begin by translating the following Italian text into English. "
-    "After that,  extract the medical data from the translated text and convert it into FHIR compliant notation. "
-    "Finally, verify whether the operators have adhered to any of the attached protocols. \n\n"
+    "Please begin by translating the following Italian text into English.\n"
+    "After that,  extract the medical data from the translated text and convert it into FHIR compliant JSON resource bundle..\n"
+    "Finally, verify whether the operators have adhered to any of the attached protocols.\n\n"
 )
 TRIGGER = "tart analysis"  # Intentionally without initial to avoid S/s matching issues
 
@@ -71,11 +72,11 @@ def analyze_text(text):
 
     with open(filename, "w", encoding="utf-8") as my_file:
         my_file.write(f"\nUsing model: {MODEL_NAME}\n")
-        my_file.write(f"Prompt: {PROMPT + text}\n")
+        my_file.write(f"Prompt: {COLLECTION + PROMPT + text}\n")
 
         response = client.chat.completions.create(
             model=MODEL_NAME,
-            messages=[{"role": "user", "content": PROMPT + text}],
+            messages=[{"role": "user", "content": COLLECTION + PROMPT + text}],
             stream=True,
             extra_body={
                 "knowledge_base_ids": KNOWLEDGE_BASE_IDS
