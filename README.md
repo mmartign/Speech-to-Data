@@ -1,5 +1,8 @@
 🚀 **Real-Time Medical Speech-to-Data Pipeline**
 
+<img width="766" alt="Screenshot 2025-06-28 at 06 22 12" src="https://github.com/user-attachments/assets/361916e0-3ae6-4af6-935d-57c8e8ac8110" />
+
+
 We're excited to share a new step in our research at Spazio IT, where we're exploring real-time audio-to-knowledge pipelines using cutting-edge AI technologies — all running on a single, high-performance machine. Here's a snapshot of what we're building:
 
 🎙️ **Live Audio Ingestion**
