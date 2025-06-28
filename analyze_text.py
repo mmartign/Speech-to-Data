@@ -84,13 +84,6 @@ def analyze_text(text):
 
         my_file.write("\nResponse:\n")
         full_response = ""
-
-        for chunk in response:
-            if chunk.choices[0].delta.content:
-                text_chunk = chunk.choices[0].delta.content
-                full_response += text_chunk
-                my_file.write(text_chunk)
-
         my_file.write("\n\nFull response received:\n")
         my_file.write(full_response)
 
