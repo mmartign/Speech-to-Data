@@ -109,8 +109,8 @@ def main():
 
         print(line.strip())
 
-        if contains_substring(line, TRIGGER):
-            if not in_analysis.is_set():
+        if not in_analysis.is_set():
+            if contains_substring(line, TRIGGER):
                 collected_text += line
                 threading.Thread(target=analyze_text, args=(collected_text,)).start()
                 collected_text = ""

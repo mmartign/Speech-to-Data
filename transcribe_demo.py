@@ -50,7 +50,7 @@ def main():
                         help="Time window for real-time audio chunking.")
     parser.add_argument("--phrase_timeout", type=float, default=3,
                         help="Pause duration before starting a new transcription line.")
-    parser.add_argument("--language", default="en", choices=["en", "fr", "de", "he", "it", "es"],
+    parser.add_argument("--language", default="en", choices=["de", "en", "es", "fr", "he", "it", "se"],
                         help="Language for transcription.")
     parser.add_argument("--pipe", action="store_true",
                         help="Enable pipe mode for continuous streaming.")
