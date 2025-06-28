@@ -1,0 +1,99 @@
+import sys
+import threading
+from openai import OpenAI
+
+# Configuration
+OPENWEBUI_URL = "http://localhost:8080/api"
+API_KEY = "sk-bae341e16b1048f5a94b305fe97337a0"
+MODEL_NAME = "deepseek-r1:32b"
+KNOWLEDGE_BASE_IDS = ["Treatment_Protocols"]  # The treatment protocols actually available
+PROMPT = (
+    "Please begin by extracting the medical data from the following text and converting it into FHIR compliant notation. "
+    "After that, verify whether the operators have adhered to any of the attached protocols. \n\n"
+)
+PROMPT_NON_ENGLISH = (
+    "Please begin by translating the following Italian text into English. "
+    "After that,  extract the medical data from the translated text and convert it into FHIR compliant notation. "
+    "Finally, verify whether the operators have adhered to any of the attached protocols. \n\n"
+)
+TRIGGER = "tart analysis"  # Intentionally without initial to avoid S/s matching issues
+
+# Global state
+analysis_counter = threading.Lock()
+counter_value = 0
+in_analysis = threading.Event()
+
+
+def analysis_num():
+    """Thread-safe increment of analysis counter."""
+    global counter_value
+    with analysis_counter:
+        counter_value += 1
+        return counter_value
+
+
+def contains_substring(string, substring):
+    """Return True if substring is in string or if substring is empty."""
+    return not substring or substring in string
+
+
+def analyze_text(text):
+    """Perform AI-based analysis on input text in a separate thread."""
+    in_analysis.set()
+    analysis_id = analysis_num()
+    print(f"Analysis[{analysis_id}] Started ------------------->>>")
+
+    client = OpenAI(base_url=OPENWEBUI_URL, api_key=API_KEY)
+    filename = f"results_analysis{analysis_id}.txt"
+
+    with open(filename, "w", encoding="utf-8") as my_file:
+        my_file.write(f"\nUsing model: {MODEL_NAME}\n")
+        my_file.write(f"Prompt: {PROMPT + text}\n")
+
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": PROMPT + text}],
+            stream=True,
+            extra_body={
+                "knowledge_base_ids": KNOWLEDGE_BASE_IDS
+            }
+        )
+
+        my_file.write("\nResponse:\n")
+        full_response = ""
+
+        for chunk in response:
+            if chunk.choices[0].delta.content:
+                text_chunk = chunk.choices[0].delta.content
+                full_response += text_chunk
+                my_file.write(text_chunk)
+
+        my_file.write("\n\nFull response received:\n")
+        my_file.write(full_response)
+
+    print(f"Analysis[{analysis_id}] Stopped <<<-------------------")
+    in_analysis.clear()
+
+
+def main():
+    """Main loop listening to stdin for input and triggers."""
+    print("Listening for input...")
+    collected_text = ""
+
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
+
+        print(line.strip())
+
+        if contains_substring(line, TRIGGER) and not in_analysis.is_set():
+            collected_text += line
+            threading.Thread(target=analyze_text, args=(collected_text,)).start()
+            collected_text = ""
+        else:
+            collected_text += line
+
+
+if __name__ == "__main__":
+    main()
