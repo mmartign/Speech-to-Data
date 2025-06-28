@@ -76,7 +76,7 @@ def analyze_text(text):
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[{"role": "user", "content": PROMPT + text}],
-            stream=False,
+            stream=True,
             extra_body={
                 "knowledge_base_ids": KNOWLEDGE_BASE_IDS
             }
@@ -84,6 +84,13 @@ def analyze_text(text):
 
         my_file.write("\nResponse:\n")
         full_response = ""
+
+        for chunk in response:
+            if chunk.choices[0].delta.content:
+                text_chunk = chunk.choices[0].delta.content
+                full_response += text_chunk
+                my_file.write(text_chunk)
+
         my_file.write("\n\nFull response received:\n")
         my_file.write(full_response)
 
