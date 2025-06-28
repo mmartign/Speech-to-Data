@@ -1,4 +1,4 @@
-🚀 Real-Time Medical Speech-to-Data Pipeline**
+🚀 **Real-Time Medical Speech-to-Data Pipeline**
 
 We're excited to share a new step in our research at Spazio IT, where we're exploring real-time audio-to-knowledge pipelines using cutting-edge AI technologies — all running on a single, high-performance machine. Here's a snapshot of what we're building:
 
@@ -21,7 +21,7 @@ Reference protocols are indexed into an OpenWebUI vector database, allowing them
 The full pipeline runs on a single machine — which could be an industrial PC equipped with sufficient RAM and GPU.
 
 📂 **Open Source Scripts**
-Initial scripts for the core functionality (marked in cyan in our architecture) are available here:
+Initial scripts for the core functionality are available here:
 🔗 [github.com/mmartign/Speech-to-Data](https://github.com/mmartign/Speech-to-Data)
 
 🔬 **Early Stage**
