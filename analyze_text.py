@@ -114,7 +114,7 @@ def main():
         
         if contains_substring(line, TRIGGER_START):
             if collect_text:
-                print(f"Please wait, analysis has already started.")
+                print(f"Analysis has already been started.")
             else:
                 collected_text = ""
                 collect_text = True
