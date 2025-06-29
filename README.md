@@ -65,7 +65,7 @@ While individual components of Spazio IT's pipeline exist in the market, **the *
         *   Are not designed as integrated, end-to-end *real-time* engines running locally.
 
 2.  **"Live Audio Ingestion" with Dynamic Segmentation:**
-    *   **Novelty:** The concept of continuously ingesting system/mic audio *without pre-recording*, using **voice triggers ("Start Analysis") for dynamic segmentation** within the live stream to define processing blocks, is a clever workflow innovation for real-time interaction.
+    *   **Novelty:** The concept of continuously ingesting system/mic audio *without pre-recording*, using **voice triggers ("Start/Stop Analysis") for dynamic segmentation** within the live stream to define processing blocks, is a clever workflow innovation for real-time interaction.
     *   **Contrast:** Solutions like ambient documentation (e.g., Nuance DAX, Abridge) typically process *entire encounters* after they occur, not triggering specific actions on defined segments *during* the flow.
 
 3.  **Generative AI for *Context Understanding* Before Structured Extraction:**
