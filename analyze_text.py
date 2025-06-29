@@ -27,7 +27,7 @@ from openai import OpenAI
 
 # Configuration
 OPENWEBUI_URL = "http://localhost:8080/api"
-API_KEY = "my-key"
+API_KEY = "sk-bae341e16b1048f5a94b305fe97337a0"
 MODEL_NAME = "deepseek-r1:32b"
 KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
 COLLECTION = "#Treatment_Protocols\n"
@@ -40,7 +40,8 @@ PROMPT_NON_ENGLISH = (
     "After that,  extract the medical data from the translated text and convert it into FHIR compliant JSON resource bundle..\n"
     "Finally, verify whether the operators have adhered to any of the attached protocols.\n\n"
 )
-TRIGGER = "tart analysis"  # Intentionally without initial to avoid S/s matching issues
+TRIGGER_START = "tart analysis"  # Intentionally without initial letter to avoid S/s matching issues
+TRIGGER_STOP = "top analysis"  # Intentionally without initial letter to avoid S/s matching issues
 
 # Global state
 analysis_counter = threading.Lock()
@@ -100,7 +101,9 @@ def analyze_text(text):
 def main():
     """Main loop listening to stdin for input and triggers."""
     print("Listening for input...")
+    
     collected_text = ""
+    collect_text = False
 
     while True:
         line = sys.stdin.readline()
@@ -108,17 +111,29 @@ def main():
             break
 
         print(line.strip())
-
-        if not in_analysis.is_set():
-            if contains_substring(line, TRIGGER):
-                collected_text += line
-                threading.Thread(target=analyze_text, args=(collected_text,)).start()
-                collected_text = ""
+        
+        if contains_substring(line, TRIGGER_START):
+            if collect_text:
+                print(f"Please wait, analysis has already started.")
             else:
+                collected_text = ""
+                collect_text = True
+                    
+        if contains_substring(line, TRIGGER_STOP):
+            if not collect_text:
+                print(f"No analysis is currently running.")
+            else:
+                if in_analysis.is_set():
+                    print(f"A previous analysis is still being processed")
+                else:
+                    collected_text += line
+                    threading.Thread(target=analyze_text, args=(collected_text,)).start()
+                    collected_text = ""
+                    collect_text = False
+        
+        if collect_text:
                 collected_text += line
-                print(f"Please wait, another analysis is currently running.")
-        else:
-            collected_text += line
+            
 
 
 if __name__ == "__main__":
