@@ -27,7 +27,7 @@ from openai import OpenAI
 
 # Configuration
 OPENWEBUI_URL = "http://localhost:8080/api"
-API_KEY = "my-key"
+API_KEY = "sk-bae341e16b1048f5a94b305fe97337a0"
 MODEL_NAME = "deepseek-r1:32b"
 KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
 COLLECTION = "#Treatment_Protocols\n"
@@ -40,8 +40,8 @@ PROMPT_NON_ENGLISH = (
     "After that,  extract the medical data from the translated text and convert it into FHIR compliant JSON resource bundle..\n"
     "Finally, verify whether the operators have adhered to any of the attached protocols.\n\n"
 )
-TRIGGER_START = "tart analysis"  # Intentionally without initial letter to avoid S/s matching issues
-TRIGGER_STOP = "top analysis"  # Intentionally without initial letter to avoid S/s matching issues
+TRIGGER_START = "Start analysis"
+TRIGGER_STOP = "Stop analysis"
 
 # Global state
 analysis_counter = threading.Lock()
@@ -112,14 +112,14 @@ def main():
 
         print(line.strip())
         
-        if contains_substring(line, TRIGGER_START):
+        if contains_substring(line.lower(), TRIGGER_START.lower()):
             if collect_text:
-                print(f"Analysis has already been started.")
+                print(f"Aanalysis has already been started.")
             else:
                 collected_text = ""
                 collect_text = True
                     
-        if contains_substring(line, TRIGGER_STOP):
+        if contains_substring(line.lower(), TRIGGER_STOP.lower()):
             if not collect_text:
                 print(f"No analysis is currently running.")
             else:
