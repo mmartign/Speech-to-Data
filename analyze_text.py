@@ -66,7 +66,7 @@ def analyze_text(text):
     """Perform AI-based analysis on input text in a separate thread."""
     in_analysis.set()
     analysis_id = analysis_num()
-    print(f"Analysis[{analysis_id}] Started ------------------->>>")
+    print(f"Processing of Analysis[{analysis_id}] Started ------------------->>>")
 
     client = OpenAI(base_url=OPENWEBUI_URL, api_key=API_KEY)
     filename = f"results_analysis{analysis_id}.txt"
@@ -94,7 +94,7 @@ def analyze_text(text):
         my_file.write("\n\nFull response received:\n")
         my_file.write(full_response)
 
-    print(f"Analysis[{analysis_id}] Stopped <<<-------------------")
+    print(f"Processing of Analysis[{analysis_id}] Finished <<<-------------------")
     in_analysis.clear()
 
 
