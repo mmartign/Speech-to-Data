@@ -27,7 +27,7 @@ from openai import OpenAI
 
 # Configuration
 OPENWEBUI_URL = "http://localhost:8080/api"
-API_KEY = "my-key"
+API_KEY = "sk-bae341e16b1048f5a94b305fe97337a0"
 MODEL_NAME = "deepseek-r1:32b"
 KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
 COLLECTION = "#Treatment_Protocols\n"
@@ -94,7 +94,7 @@ def analyze_text(text):
         my_file.write("\n\nFull response received:\n")
         my_file.write(full_response)
 
-    print(f"Processing of Analysis[{analysis_id}] Finished <<<-------------------")
+    print(f"Processing of Analysis[{analysis_id}] Finished ------------------->>>")
     in_analysis.clear()
 
 
@@ -114,18 +114,20 @@ def main():
         
         if contains_substring(line.lower(), TRIGGER_START.lower()):
             if collect_text:
-                print(f"Aanalysis has already been started.")
+                print(f"Analysis has already been started  ------------------->>>")
             else:
+                print(f"Analysis started ------------------->>>")
                 collected_text = ""
                 collect_text = True
                     
         if contains_substring(line.lower(), TRIGGER_STOP.lower()):
             if not collect_text:
-                print(f"No analysis is currently running.")
+                print(f"No analysis is currently running ------------------->>>")
             else:
                 if in_analysis.is_set():
-                    print(f"A previous analysis is still being processed")
+                    print(f"A previous analysis is still being processed ------------------->>>")
                 else:
+                    print(f"Analysis stopped ------------------->>>")
                     collected_text += line
                     threading.Thread(target=analyze_text, args=(collected_text,)).start()
                     collected_text = ""
