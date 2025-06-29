@@ -27,7 +27,7 @@ from openai import OpenAI
 
 # Configuration
 OPENWEBUI_URL = "http://localhost:8080/api"
-API_KEY = "my-key"
+API_KEY = "sk-bae341e16b1048f5a94b305fe97337a0"
 MODEL_NAME = "deepseek-r1:32b"
 KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
 COLLECTION = "#Treatment_Protocols\n"
@@ -75,24 +75,31 @@ def analyze_text(text):
         my_file.write(f"\nUsing model: {MODEL_NAME}\n")
         my_file.write(f"Prompt: {COLLECTION + PROMPT + text}\n")
 
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": COLLECTION + PROMPT + text}],
-            stream=True,
-            extra_body={
-                "knowledge_base_ids": KNOWLEDGE_BASE_IDS
-            }
-        )
+        try:
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[{"role": "user", "content": COLLECTION + PROMPT + text}],
+                stream=True,
+                extra_body={
+                    "knowledge_base_ids": KNOWLEDGE_BASE_IDS
+                }
+            )
 
-        full_response = ""
+            full_response = ""
 
-        for chunk in response:
-            if chunk.choices[0].delta.content:
-                text_chunk = chunk.choices[0].delta.content
-                full_response += text_chunk
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                    text_chunk = chunk.choices[0].delta.content
+                    full_response += text_chunk
 
-        my_file.write("\n\nFull response received:\n")
-        my_file.write(full_response)
+            my_file.write("\n\nFull response received:\n")
+            my_file.write(full_response)
+
+        except Exception as e:
+            # Catch and log any unexpected error
+            error_msg = f"\n[ERROR] Analysis[{analysis_id}] failed: {str(e)}\n"
+            print(error_msg)
+            my_file.write(error_msg)
 
     print(f"Processing of Analysis[{analysis_id}] Finished ------------------->>>")
     in_analysis.clear()
