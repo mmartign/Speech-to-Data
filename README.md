@@ -9,7 +9,7 @@ We're excited to share a new step in our research at Spazio IT, where we're expl
 Using Whisper, we convert real-time system audio (e.g., a microphone stream) into continuous text — no audio recordings needed.
 
 🧠 **Intelligent Segmentation**
-The text stream is segmented using triggers like “Start Analysis” to isolate relevant sections for deeper analysis.
+The text stream is segmented using triggers like “Start/Stop Analysis” to isolate relevant sections for analysis.
 
 🔍 **Generative AI Processing**
 Each segmented block is analyzed by a generative AI system to understand context and content.
