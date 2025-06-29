@@ -27,7 +27,7 @@ from openai import OpenAI
 
 # Configuration
 OPENWEBUI_URL = "http://localhost:8080/api"
-API_KEY = "my-key"
+API_KEY = "sk-bae341e16b1048f5a94b305fe97337a0"
 MODEL_NAME = "deepseek-r1:32b"
 KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
 COLLECTION = "#Treatment_Protocols\n"
@@ -81,7 +81,8 @@ def analyze_text(text):
                 messages=[{"role": "user", "content": COLLECTION + PROMPT + text}],
                 stream=True,
                 extra_body={
-                    "knowledge_base_ids": KNOWLEDGE_BASE_IDS
+                    "knowledge_base_ids": KNOWLEDGE_BASE_IDS,
+                    "enable_websearch": True
                 }
             )
 
