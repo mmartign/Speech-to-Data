@@ -23,25 +23,22 @@
 #
 import sys
 import threading
+import configparser
 from openai import OpenAI
 
+# Load configuration
+config = configparser.ConfigParser()
+config.read("./config.ini")
+
 # Configuration
-OPENWEBUI_URL = "http://localhost:8080/api"
-API_KEY = "my-key"
-MODEL_NAME = "deepseek-r1:32b"
-KNOWLEDGE_BASE_IDS = ["#Treatment_Protocols"]  # The treatment protocols actually available
-COLLECTION = "#Treatment_Protocols\n"
-PROMPT = (
-    "Please, begin by extracting the medical data from the following text and converting it into FHIR compliant JSON resource bundle.\n"
-    "After that, verify whether the operators have adhered to any of the attached protocols.\n\n"
-)
-PROMPT_NON_ENGLISH = (
-    "Please, begin by translating the following Italian text into English.\n"
-    "After that,  extract the medical data from the translated text and convert it into FHIR compliant JSON resource bundle..\n"
-    "Finally, verify whether the operators have adhered to any of the attached protocols.\n\n"
-)
-TRIGGER_START = "Start analysis"
-TRIGGER_STOP = "Stop analysis"
+OPENWEBUI_URL = config["openai"]["base_url"]
+API_KEY = config["openai"]["api_key"]
+MODEL_NAME = config["openai"]["model_name"]
+KNOWLEDGE_BASE_IDS = [config["analysis"]["knowledge_base_ids"]]
+COLLECTION = config["analysis"]["collection"] + "\n"
+PROMPT = config["prompts"]["prompt"]
+TRIGGER_START = config["triggers"]["start"]
+TRIGGER_STOP = config["triggers"]["stop"]
 
 # Global state
 analysis_counter = threading.Lock()
