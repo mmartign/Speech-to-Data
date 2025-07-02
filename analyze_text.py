@@ -35,7 +35,6 @@ OPENWEBUI_URL = config["openai"]["base_url"]
 API_KEY = config["openai"]["api_key"]
 MODEL_NAME = config["openai"]["model_name"]
 KNOWLEDGE_BASE_IDS = [config["analysis"]["knowledge_base_ids"]]
-COLLECTION = config["analysis"]["collection"] + "\n"
 PROMPT = config["prompts"]["prompt"]
 TRIGGER_START = config["triggers"]["start"]
 TRIGGER_STOP = config["triggers"]["stop"]
@@ -70,12 +69,12 @@ def analyze_text(text):
 
     with open(filename, "w", encoding="utf-8") as my_file:
         my_file.write(f"\nUsing model: {MODEL_NAME}\n")
-        my_file.write(f"Prompt: {COLLECTION + PROMPT + text}\n")
+        my_file.write(f"Prompt: {PROMPT + chr(10) + text}\n")
 
         try:
             response = client.chat.completions.create(
                 model=MODEL_NAME,
-                messages=[{"role": "user", "content": COLLECTION + PROMPT + text}],
+                messages=[{"role": "user", "content": PROMPT + chr(10) +  text}],
                 stream=True,
                 extra_body={
                     "knowledge_base_ids": KNOWLEDGE_BASE_IDS,
