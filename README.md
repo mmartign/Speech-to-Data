@@ -85,11 +85,11 @@ While individual components of Spazio IT's pipeline exist in the market, **the *
 
 **The novelty lies in:** The **tightly integrated real-time edge workflow**, the **dynamic voice-triggered segmentation** within a live stream, and the **specific architecture** leveraging GenAI for context before structured extraction combined with immediate KB lookup. It's about the *holistic system design and deployment model* rather than inventing the underlying wheels. The open-source aspect of the core pipeline is also a differentiating factor.
 
-## Performance Improvements: C++ vs Python Implementation
+**Performance Improvements: C++ vs Python Implementation**
 
 This C++ rewrite significantly enhances real-time transcription performance over the original Python version through:
 
-### 🚀 Low-Latency Audio Processing
+🚀 **Low-Latency Audio Processing**
 - **Native PortAudio integration**  
   Direct hardware access replaces Python's PyAudio wrapper
 - **On-device VAD**  
@@ -97,7 +97,7 @@ This C++ rewrite significantly enhances real-time transcription performance over
 - **Zero-copy buffering**  
   Audio chunks pass directly between layers without duplication
 
-### ⚡ Real-Time Optimization
+⚡ **Real-Time Optimization**
 ```diff
 + 3.2x faster audio pipeline
 + 40% lower memory usage
