@@ -49,6 +49,18 @@
 #define MIN_AUDIO_LENGTH_MS 100
 #define MIN_AUDIO_SAMPLES static_cast<size_t>(SAMPLE_RATE * MIN_AUDIO_LENGTH_MS / 1000.0)
 
+struct Args {
+    std::string model = "medium";
+    bool non_english = false;
+    int energy_threshold = -1;
+    double record_timeout = 2.0;
+    double phrase_timeout = 3.0;
+    std::string language = "en";
+    bool pipe = false;
+    std::string default_microphone;
+    std::string whisper_model_path;
+} args;
+
 class AudioRecorder {
 public:
     virtual ~AudioRecorder() = default;
@@ -282,6 +294,12 @@ void PortAudioRecorder::stopRecording() {
 }
 
 void PortAudioRecorder::adjustForAmbientNoise() {
+
+    if (args.energy_threshold != -1) {
+        energyThreshold = args.energy_threshold;
+        return;
+    }
+
     std::cout << "Adjusting for ambient noise (listening for 3 seconds)..." << std::endl;
     std::vector<int16_t> noise_samples;
     std::mutex noise_mutex;
@@ -389,26 +407,9 @@ public:
         }
         return result_text;
     }
-
-    void setLanguage(const std::string& lang) {
-        // Actual language setting happens in transcribe()
-    }
-};
-
-struct Args {
-    std::string model = "medium";
-    bool non_english = false;
-    int energy_threshold = 1000;
-    double record_timeout = 2.0;
-    double phrase_timeout = 3.0;
-    std::string language = "en";
-    bool pipe = false;
-    std::string default_microphone;
-    std::string whisper_model_path;
 };
 
 Args parse_arguments(int argc, char* argv[]) {
-    Args args;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--model" && i + 1 < argc) {
@@ -499,16 +500,18 @@ int main(int argc, char* argv[]) {
     WhisperModel audio_model(args.whisper_model_path);
     std::vector<std::string> transcription = {""};
 
-    // Calibrate microphone
-    std::cout << "Calibrating microphone..." << std::endl;
-    if (!recorder->startRecording(
-            [](const std::vector<int16_t>&) {}, // Dummy callback
-            SAMPLE_RATE, args.record_timeout, args.phrase_timeout)) {
-        std::cerr << "Failed to start recording for calibration." << std::endl;
-        return 1;
+    // Calibrate microphone if energy theshold not set
+    if (args.energy_threshold == -1) {
+        std::cout << "Calibrating microphone..." << std::endl;
+        if (!recorder->startRecording(
+                [](const std::vector<int16_t>&) {}, // Dummy callback
+                SAMPLE_RATE, args.record_timeout, args.phrase_timeout)) {
+            std::cerr << "Failed to start recording for calibration." << std::endl;
+            return 1;
+        }
+        recorder->adjustForAmbientNoise();
+        recorder->stopRecording();
     }
-    recorder->adjustForAmbientNoise();
-    recorder->stopRecording();
 
     // Start continuous recording
     auto record_callback = [&](const std::vector<int16_t>& audio_data) {
