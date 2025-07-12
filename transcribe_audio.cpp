@@ -99,7 +99,7 @@ private:
     std::mutex callback_mutex_;
     
     // PortAudio initialization flag
-    public static std::atomic<bool> pa_initialized;
+    static std::atomic<bool> pa_initialized;
     static std::mutex pa_init_mutex;
     
     static int pa_callback(const void *inputBuffer, void *outputBuffer,
@@ -136,6 +136,22 @@ public:
     void adjustForAmbientNoise(int energy_threshold) override;
     void setEnergyThreshold(int threshold) override { energyThreshold = threshold; }
     int getEnergyThreshold() const override { return energyThreshold.load(); }
+    static void setInizialized(bool initialized) {
+        pa_initialized = initialized;
+    }
+    static bool isInitialized() {
+        return pa_initialized.load();
+    }
+    static void ensureInitialized() {
+        std::lock_guard<std::mutex> lock(pa_init_mutex);
+        if (!pa_initialized) {
+            PaError err = Pa_Initialize();
+            if (err != paNoError) {
+                throw std::runtime_error("PortAudio initialization failed: " + std::string(Pa_GetErrorText(err)));
+            }
+            pa_initialized = true;
+        }
+    }
 };
 
 // Initialize static members
@@ -144,15 +160,15 @@ std::mutex PortAudioRecorder::pa_init_mutex;
 
 std::vector<std::string> AudioRecorder::listMicrophoneNames() {
     std::vector<std::string> names;
-    std::lock_guard<std::mutex> lock(PortAudioRecorder::pa_init_mutex);
+    PortAudioRecorder::ensureInitialized();
     
-    if (!PortAudioRecorder::pa_initialized) {
+    if (!PortAudioRecorder::isInitialized) {
         PaError err = Pa_Initialize();
         if (err != paNoError) {
             std::cerr << "PortAudio error (listMicrophoneNames init): " << Pa_GetErrorText(err) << std::endl;
             return names;
         }
-        PortAudioRecorder::pa_initialized = true;
+        PortAudioRecorder::setInizialized(true);
     }
 
     int numDevices = Pa_GetDeviceCount();
