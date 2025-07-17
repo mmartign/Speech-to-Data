@@ -41,6 +41,7 @@
 #include <sstream>
 #include <iomanip>
 #include <unordered_set>
+#include <ctime>
 // PortAudio includes
 #include "portaudio.h"
 // whisper.cpp includes
@@ -59,6 +60,7 @@ struct Args {
     double phrase_timeout = 3.0;
     std::string language = "en";
     bool pipe = false;
+    bool timestamp = false;
     std::string default_microphone;
     std::string whisper_model_path;
 };
@@ -162,7 +164,7 @@ std::vector<std::string> AudioRecorder::listMicrophoneNames() {
     std::vector<std::string> names;
     PortAudioRecorder::ensureInitialized();
     
-    if (!PortAudioRecorder::isInitialized) {
+    if (!PortAudioRecorder::isInitialized()) {
         PaError err = Pa_Initialize();
         if (err != paNoError) {
             std::cerr << "PortAudio error (listMicrophoneNames init): " << Pa_GetErrorText(err) << std::endl;
@@ -474,7 +476,7 @@ Args parse_arguments(int argc, char* argv[]) {
     const std::unordered_set<std::string> valid_args = {
         "--model", "--non_english", "--energy_threshold", "--record_timeout",
         "--phrase_timeout", "--language", "--pipe", "--default_microphone",
-        "--whisper_model_path", "--help", "-h"
+        "--whisper_model_path", "--help", "-h", "--timestamp"
     };
 
     for (int i = 1; i < argc; ++i) {
@@ -507,6 +509,8 @@ Args parse_arguments(int argc, char* argv[]) {
             args.language = argv[++i];
         } else if (arg == "--pipe") {
             args.pipe = true;
+        } else if (arg == "--timestamp") {
+            args.timestamp = true;
         } else if (arg == "--default_microphone" && i + 1 < argc) {
             args.default_microphone = argv[++i];
         } else if (arg == "--whisper_model_path" && i + 1 < argc) {
@@ -520,6 +524,7 @@ Args parse_arguments(int argc, char* argv[]) {
                       << "  --phrase_timeout <float>  Silence duration to end a phrase (seconds). Default: 3.0\n"
                       << "  --language <lang>         Language for transcription (de, en, es, fr, he, it, sv). Default: en\n"
                       << "  --pipe                    Enable pipe mode for continuous streaming.\n"
+                      << "  --timestamp               Print timestamps before each line in pipe mode.\n"
                       << "  --whisper_model_path <path> REQUIRED: Path to the ggml Whisper model file\n";
             #ifdef __linux__
             std::cout << "  --default_microphone <name> Default microphone name. Use 'list' to see options.\n";
@@ -550,6 +555,16 @@ std::string trim(const std::string& str) {
     
     size_t end = str.find_last_not_of(" \t\n\r\f\v");
     return str.substr(start, end - start + 1);
+}
+
+std::string get_current_timestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto now_time_t = std::chrono::system_clock::to_time_t(now);
+    auto now_tm = *std::localtime(&now_time_t);
+    
+    std::ostringstream oss;
+    oss << std::put_time(&now_tm, "[%Y/%m/%d %H:%M:%S]");
+    return oss.str();
 }
 
 int main(int argc, char* argv[]) {
@@ -637,7 +652,11 @@ int main(int argc, char* argv[]) {
                 }
 
                 if (args.pipe) {
-                    std::cout << text << std::endl;
+                    if (args.timestamp) {
+                        std::cout << get_current_timestamp() << " " << text << std::endl;
+                    } else {
+                        std::cout << text << std::endl;
+                    }
                 } else {
                     if (phrase_complete) {
                         transcription.push_back(text);
