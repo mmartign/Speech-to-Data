@@ -563,7 +563,7 @@ std::string get_current_timestamp() {
     auto now_tm = *std::localtime(&now_time_t);
     
     std::ostringstream oss;
-    oss << std::put_time(&now_tm, "[%Y/%m/%d %H:%M:%S]");
+    oss << std::put_time(&now_tm, "[%Y-%m-%d %H:%M:%S]");
     return oss.str();
 }
 
