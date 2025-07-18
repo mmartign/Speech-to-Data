@@ -108,7 +108,7 @@ bool contains_substring(const std::string& str, const std::string& sub) {
 void analyze_text(const std::string& text) {
     in_analysis = true;
     int analysis_id = ++counter_value;
-    std::cout << "Processing of Analysis[" << analysis_id << "] Started ------------------->>>\n";
+    std::cout << "Analysis of Recording[" << analysis_id << "] Started ------------------->>>\n";
 
     std::string filename = "results_analysis" + std::to_string(analysis_id) + ".txt";
     std::ofstream file(filename);
@@ -122,24 +122,24 @@ void analyze_text(const std::string& text) {
             });
 
     // Create the request body
-    json body = {
-        {"model", MODEL_NAME},
-        {"messages", {{{"role", "user"}, {"content", PROMPT + "\n" + text}}}},
-        {"stream", false},
-        {"knowledge_base_ids", {KNOWLEDGE_BASE_IDS}},
-        {"enable_websearch", true}
-    };
+        json body = {
+            {"model", MODEL_NAME},
+            {"messages", {{{"role", "user"}, {"content", PROMPT + "\n" + text}}}},
+            {"stream", false},
+            {"knowledge_base_ids", {KNOWLEDGE_BASE_IDS}},
+            {"enable_websearch", true}
+        };
 
-    // Call OpenWebUI
-    auto chat = openai::chat().create(body);
-    std::string response_string = chat["choices"][0]["message"]["content"];
+        // Call OpenWebUI
+        auto chat = openai::chat().create(body);
+        std::string response_string = chat["choices"][0]["message"]["content"];
    
-    file << "\n\nFull response received:\n" << response_string << "\n";
+        file << "\n\nFull response received:\n" << response_string << "\n";
     } catch (const std::exception& e) {
         file << "\n[ERROR] Analysis[" << analysis_id << "] failed: " << e.what() << "\n";
     }
 
-    std::cout << "Processing of Analysis[" << analysis_id << "] Finished ------------------->>>\n";
+    std::cout << "Analysis of Recording[" << analysis_id << "] Finished ------------------->>>\n";
     in_analysis = false;
 }
 
@@ -164,9 +164,9 @@ int main() {
 
         if (contains_substring(lower_line, TRIGGER_START)) {
             if (collect_text) {
-                std::cout << "Analysis has already been started ------------------->>>\n";
+                std::cout << "Recording has already been started ------------------->>>\n";
             } else {
-                std::cout << "Analysis started ------------------->>>\n";
+                std::cout << "Recording started ------------------->>>\n";
                 collected_text.clear();
                 collect_text = true;
             }
@@ -174,11 +174,11 @@ int main() {
 
         if (contains_substring(lower_line, TRIGGER_STOP)) {
             if (!collect_text) {
-                std::cout << "No analysis is currently running ------------------->>>\n";
+                std::cout << "No recording is currently running ------------------->>>\n";
             } else if (in_analysis) {
-                std::cout << "A previous analysis is still being processed ------------------->>>\n";
+                std::cout << "A previous recording is still being analyzed ------------------->>>\n";
             } else {
-                std::cout << "Analysis stopped ------------------->>>\n";
+                std::cout << "Recording stopped ------------------->>>\n";
                 collected_text += line + "\n";
                 std::thread(analyze_text, collected_text).detach();
                 collected_text.clear();
