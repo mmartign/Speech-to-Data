@@ -8,13 +8,13 @@ We're excited to share a new step in our research at Spazio IT, where we're expl
 Using Whisper, we convert real-time system audio (e.g., a microphone stream) into continuous text — no audio recordings needed.
 
 🧠 **Intelligent Segmentation**
-The text stream is segmented using triggers like “Start/Stop Analysis” to isolate relevant sections for analysis.
+The text stream is segmented using triggers like “Start/Stop Recording” to isolate relevant sections for analysis.
 
 🔍 **Generative AI Processing**
 Each segmented block is analyzed by a generative AI system to understand context and content.
 
 🏥 **Medical Data Extraction in FHIR**
-An AI model (currently DeepSeek) extracts structured medical data in FHIR format — enabling interoperability and downstream use.
+An AI model (currently OpenEuroLLM) extracts structured medical data in FHIR format — enabling interoperability and downstream use.
 
 📚 **Treatment Protocols as Knowledge Bases**
 Reference protocols are indexed into an OpenWebUI vector database, allowing them to be queried alongside live speech-derived data.
