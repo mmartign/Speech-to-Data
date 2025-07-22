@@ -1,6 +1,6 @@
 🚀 **Real-Time Medical Speech-to-Data Pipeline**
 
-<img width="736" height="351" alt="Speech-to-Data-Architecture drawio" src="https://github.com/user-attachments/assets/ba1a061c-36c6-4228-8f47-2976fb2b9a3f" />
+<img width="736" height="351" alt="Speech-to-Data-Architecture drawio" src="https://github.com/user-attachments/assets/b0c33b8e-9492-4e3d-8a82-15008ce65327" />
 
 We're excited to share a new step in our research at Spazio IT, where we're exploring real-time audio-to-knowledge pipelines using cutting-edge AI technologies — all running on a single, high-performance machine. Here's a snapshot of what we're building:
 
@@ -14,7 +14,7 @@ The text stream is segmented using triggers like “Start/Stop Recording” to i
 Each segmented block is analyzed by a generative AI system to understand context and content.
 
 🏥 **Medical Data Extraction in FHIR**
-An AI model (currently OpenEuroLLM) extracts structured medical data in FHIR format — enabling interoperability and downstream use.
+An AI model (currently DeepSeek of Gemma) extracts structured medical data in FHIR format — enabling interoperability and downstream use.
 
 📚 **Treatment Protocols as Knowledge Bases**
 Reference protocols are indexed into an OpenWebUI vector database, allowing them to be queried alongside live speech-derived data.
