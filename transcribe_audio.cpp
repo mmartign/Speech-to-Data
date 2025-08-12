@@ -24,6 +24,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see https://www.gnu.org/licenses/.
 //
+
 #include <iostream>
 #include <string>
 #include <vector>
@@ -42,15 +43,83 @@
 #include <iomanip>
 #include <unordered_set>
 #include <ctime>
+#include <memory>
+#include <future>
+
 // PortAudio includes
 #include "portaudio.h"
 // whisper.cpp includes
 #include "whisper.h"
 
-#define SAMPLE_RATE 16000
-#define FRAMES_PER_BUFFER 1024
-#define MIN_AUDIO_LENGTH_MS 100
-#define MIN_AUDIO_SAMPLES static_cast<size_t>(SAMPLE_RATE * MIN_AUDIO_LENGTH_MS / 1000.0)
+// Constants
+namespace Constants {
+    constexpr int SAMPLE_RATE = 16000;
+    constexpr int FRAMES_PER_BUFFER = 1024;
+    constexpr int MIN_AUDIO_LENGTH_MS = 100;
+    constexpr size_t MIN_AUDIO_SAMPLES = static_cast<size_t>(SAMPLE_RATE * MIN_AUDIO_LENGTH_MS / 1000.0);
+    constexpr double AMBIENT_NOISE_DURATION_SECONDS = 3.0;
+    constexpr double ENERGY_THRESHOLD_MULTIPLIER = 2.5;
+    constexpr int WHISPER_MAX_THREADS = 4;
+    constexpr int MAIN_LOOP_TIMEOUT_MS = 250;
+    constexpr double PHRASE_TIMEOUT_MULTIPLIER = 1.5;
+}
+
+// Custom exception class
+class AudioException : public std::runtime_error {
+public:
+    explicit AudioException(const std::string& message) : std::runtime_error(message) {}
+};
+
+// RAII wrapper for PortAudio stream
+class PortAudioStream {
+private:
+    PaStream* stream = nullptr;
+    
+public:
+    PortAudioStream() = default;
+    
+    ~PortAudioStream() {
+        close();
+    }
+    
+    bool open(PaStreamParameters* inputParameters, 
+             double sampleRate,
+             unsigned long framesPerBuffer,
+             PaStreamCallback* callback,
+             void* userData) {
+        close(); // Ensure any existing stream is closed
+        
+        PaError err = Pa_OpenStream(&stream, inputParameters, nullptr, 
+                                   sampleRate, framesPerBuffer, paClipOff, 
+                                   callback, userData);
+        return err == paNoError;
+    }
+    
+    bool start() {
+        if (!stream) return false;
+        PaError err = Pa_StartStream(stream);
+        return err == paNoError;
+    }
+    
+    void stop() {
+        if (stream) {
+            Pa_StopStream(stream);
+        }
+    }
+    
+    void close() {
+        if (stream) {
+            Pa_CloseStream(stream);
+            stream = nullptr;
+        }
+    }
+    
+    bool is_active() const {
+        return stream && Pa_IsStreamActive(stream) == 1;
+    }
+    
+    PaStream* get() const { return stream; }
+};
 
 struct Args {
     std::string model = "medium";
@@ -81,11 +150,12 @@ public:
 
 class PortAudioRecorder : public AudioRecorder {
 private:
-    PaStream *stream = nullptr;
+    PortAudioStream stream;
     std::function<void(const std::vector<int16_t>&)> audioCallback;
     std::atomic<bool> recordingActive{false};
     std::atomic<int> energyThreshold{1000};
-    int sampleRate_ = SAMPLE_RATE;
+    std::atomic<int> energyThresholdSquared{1000 * 1000};
+    int sampleRate_ = Constants::SAMPLE_RATE;
     double recordTimeout_ = 2.0;
     double phraseTimeout_ = 3.0;
     size_t max_buffer_samples_ = 0;
@@ -94,13 +164,14 @@ private:
     
     // VAD state
     std::vector<int16_t> vad_buffer;
+    std::vector<int16_t> pre_allocated_buffer;
     std::mutex vad_buffer_mutex;
     size_t consecutive_silence_chunks_ = 0;
     
     // Callback protection
     std::mutex callback_mutex_;
     
-    // PortAudio initialization flag
+    // PortAudio initialization
     static std::atomic<bool> pa_initialized;
     static std::mutex pa_init_mutex;
     
@@ -109,13 +180,63 @@ private:
                            const PaStreamCallbackTimeInfo* timeInfo,
                            PaStreamCallbackFlags statusFlags,
                            void *userData);
+                           
+    // Helper functions for VAD processing
+    double calculate_audio_energy(const std::vector<int16_t>& audio) const {
+        double sum_squares = 0.0;
+        for (int16_t sample : audio) {
+            sum_squares += static_cast<double>(sample) * sample;
+        }
+        return sum_squares;
+    }
+    
+    void process_audio_with_vad(const std::vector<int16_t>& current_chunk) {
+        double sum_squares = calculate_audio_energy(current_chunk);
+        int threshold_squared = energyThresholdSquared.load();
+        bool is_speech = sum_squares > threshold_squared * current_chunk.size();
+        
+        std::lock_guard<std::mutex> lock(vad_buffer_mutex);
+        if (is_speech) {
+            consecutive_silence_chunks_ = 0;
+            vad_buffer.insert(vad_buffer.end(), current_chunk.begin(), current_chunk.end());
+        } else if (!vad_buffer.empty()) {
+            consecutive_silence_chunks_++;
+            vad_buffer.insert(vad_buffer.end(), current_chunk.begin(), current_chunk.end());
+        }
+        
+        check_and_send_buffer();
+    }
+    
+    void check_and_send_buffer() {
+        if (!vad_buffer.empty() && 
+            (vad_buffer.size() >= max_buffer_samples_ || 
+             consecutive_silence_chunks_ >= max_silence_chunks_)) {
+            
+            std::function<void(const std::vector<int16_t>&)> callback;
+            {
+                std::lock_guard<std::mutex> lock(callback_mutex_);
+                callback = audioCallback;
+            }
+            
+            if (callback) {
+                callback(vad_buffer);
+            }
+            vad_buffer.clear();
+            consecutive_silence_chunks_ = 0;
+        }
+    }
+    
+public:
+    PortAudioRecorder() {
+        ensure_pa_initialized();
+    }
 
-    void ensure_pa_initialized() {
+    void static ensure_pa_initialized() {
         std::lock_guard<std::mutex> lock(pa_init_mutex);
         if (!pa_initialized) {
             PaError err = Pa_Initialize();
             if (err != paNoError) {
-                throw std::runtime_error("PortAudio init failed: " + std::string(Pa_GetErrorText(err)));
+                throw AudioException("PortAudio init failed: " + std::string(Pa_GetErrorText(err)));
             }
             pa_initialized = true;
             std::atexit([]() {
@@ -126,33 +247,166 @@ private:
             });
         }
     }
-
-public:
-    PortAudioRecorder();
-    ~PortAudioRecorder();
+     
+    ~PortAudioRecorder() {
+        stopRecording();
+    }
+    
     bool startRecording(std::function<void(const std::vector<int16_t>&)> callback, 
                        int sampleRate, 
                        double recordTimeout,
-                       double phraseTimeout) override;
-    void stopRecording() override;
-    void adjustForAmbientNoise(int energy_threshold) override;
-    void setEnergyThreshold(int threshold) override { energyThreshold = threshold; }
+                       double phraseTimeout) override {
+        if (recordingActive) {
+            stopRecording();
+        }
+        
+        if (sampleRate <= 0 || recordTimeout <= 0 || phraseTimeout <= 0) {
+            throw AudioException("Invalid parameters: sample rate and timeouts must be positive");
+        }
+        
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            audioCallback = callback;
+        }
+        
+        sampleRate_ = sampleRate;
+        recordTimeout_ = recordTimeout;
+        phraseTimeout_ = phraseTimeout;
+        
+        // Calculate buffer limits
+        max_buffer_samples_ = static_cast<size_t>(sampleRate_ * recordTimeout_);
+        max_silence_chunks_ = static_cast<size_t>(std::ceil(phraseTimeout_ * sampleRate_ / Constants::FRAMES_PER_BUFFER));
+        consecutive_silence_chunks_ = 0;
+        bypass_vad_ = false;
+        
+        // Pre-allocate buffer to avoid reallocations
+        pre_allocated_buffer.reserve(max_buffer_samples_ + Constants::FRAMES_PER_BUFFER);
+        vad_buffer.reserve(max_buffer_samples_);
+        
+        recordingActive = true;
+        ensure_pa_initialized();
+        
+        PaStreamParameters inputParameters;
+        inputParameters.device = Pa_GetDefaultInputDevice();
+        if (inputParameters.device == paNoDevice) {
+            throw AudioException("Error: No default input device.");
+        }
+        
+        inputParameters.channelCount = 1;
+        inputParameters.sampleFormat = paInt16;
+        inputParameters.suggestedLatency = Pa_GetDeviceInfo(inputParameters.device)->defaultLowInputLatency;
+        inputParameters.hostApiSpecificStreamInfo = nullptr;
+        
+        if (!stream.open(&inputParameters, sampleRate_, Constants::FRAMES_PER_BUFFER, pa_callback, this)) {
+            throw AudioException("PortAudio error (open stream): " + std::string(Pa_GetErrorText(Pa_GetLastHostErrorInfo()->errorCode)));
+        }
+        
+        if (!stream.start()) {
+            throw AudioException("PortAudio error (start stream): " + std::string(Pa_GetErrorText(Pa_GetLastHostErrorInfo()->errorCode)));
+        }
+        
+        std::cout << "Started recording on: " << Pa_GetDeviceInfo(inputParameters.device)->name << std::endl;
+        return true;
+    }
+    
+    void stopRecording() override {
+        if (recordingActive) {
+            recordingActive = false;
+            stream.stop();
+            stream.close();
+            
+            // Clear any remaining VAD buffer
+            std::lock_guard<std::mutex> lock(vad_buffer_mutex);
+            vad_buffer.clear();
+        }
+    }
+    
+    void adjustForAmbientNoise(int energy_threshold) override {
+        if (energy_threshold != -1) {
+            energyThreshold = energy_threshold;
+            energyThresholdSquared = energy_threshold * energy_threshold;
+            std::cout << "Using provided energy threshold: " << energy_threshold << std::endl;
+            return;
+        }
+        
+        std::cout << "Adjusting for ambient noise (listening for " 
+                  << Constants::AMBIENT_NOISE_DURATION_SECONDS << " seconds)..." << std::endl;
+        
+        std::vector<int16_t> noise_samples;
+        std::mutex noise_mutex;
+        std::condition_variable noise_cv;
+        bool noise_collection_done = false;
+        
+        // Create temporary callback
+        auto noise_callback = [&](const std::vector<int16_t>& audio_data) {
+            std::lock_guard<std::mutex> lock(noise_mutex);
+            noise_samples.insert(noise_samples.end(), audio_data.begin(), audio_data.end());
+            if (noise_samples.size() >= static_cast<size_t>(Constants::SAMPLE_RATE * Constants::AMBIENT_NOISE_DURATION_SECONDS)) {
+                noise_collection_done = true;
+                noise_cv.notify_one();
+            }
+        };
+        
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            audioCallback = noise_callback;
+        }
+        
+        bypass_vad_ = true;
+        
+        // Start the stream if not already running
+        bool was_running = recordingActive;
+        if (!was_running) {
+            try {
+                if (!startRecording(noise_callback, sampleRate_, recordTimeout_, phraseTimeout_)) {
+                    throw AudioException("Failed to start recording for ambient noise adjustment.");
+                }
+            } catch (const AudioException& e) {
+                bypass_vad_ = false;
+                throw;
+            }
+        }
+        
+        // Wait for noise collection to complete
+        std::unique_lock<std::mutex> lock(noise_mutex);
+        auto status = noise_cv.wait_for(lock, std::chrono::seconds(4), [&]{ return noise_collection_done; });
+        bypass_vad_ = false;
+        
+        if (!was_running) {
+            stopRecording();
+        }
+        
+        if (noise_samples.empty()) {
+            throw AudioException("No noise samples collected. Using default energy threshold.");
+        }
+        
+        // Calculate RMS of noise samples
+        double sum_squares = 0.0;
+        for (int16_t sample : noise_samples) {
+            sum_squares += static_cast<double>(sample) * sample;
+        }
+        double rms = std::sqrt(sum_squares / noise_samples.size());
+        
+        // Set threshold based on estimated noise RMS
+        int threshold = static_cast<int>(rms * Constants::ENERGY_THRESHOLD_MULTIPLIER);
+        energyThreshold = threshold;
+        energyThresholdSquared = threshold * threshold;
+        std::cout << "Adjusted energy threshold to: " << threshold << std::endl;
+    }
+    
+    void setEnergyThreshold(int threshold) override { 
+        energyThreshold = threshold;
+        energyThresholdSquared = threshold * threshold;
+    }
+    
     int getEnergyThreshold() const override { return energyThreshold.load(); }
-    static void setInizialized(bool initialized) {
+    
+    static void setInitialized(bool initialized) {
         pa_initialized = initialized;
     }
+    
     static bool isInitialized() {
         return pa_initialized.load();
-    }
-    static void ensureInitialized() {
-        std::lock_guard<std::mutex> lock(pa_init_mutex);
-        if (!pa_initialized) {
-            PaError err = Pa_Initialize();
-            if (err != paNoError) {
-                throw std::runtime_error("PortAudio initialization failed: " + std::string(Pa_GetErrorText(err)));
-            }
-            pa_initialized = true;
-        }
     }
 };
 
@@ -162,43 +416,35 @@ std::mutex PortAudioRecorder::pa_init_mutex;
 
 std::vector<std::string> AudioRecorder::listMicrophoneNames() {
     std::vector<std::string> names;
-    PortAudioRecorder::ensureInitialized();
     
-    if (!PortAudioRecorder::isInitialized()) {
-        PaError err = Pa_Initialize();
-        if (err != paNoError) {
-            std::cerr << "PortAudio error (listMicrophoneNames init): " << Pa_GetErrorText(err) << std::endl;
-            return names;
+    try {
+        PortAudioRecorder::ensure_pa_initialized();
+        
+        if (!PortAudioRecorder::isInitialized()) {
+            PaError err = Pa_Initialize();
+            if (err != paNoError) {
+                throw AudioException("PortAudio error (listMicrophoneNames init): " + std::string(Pa_GetErrorText(err)));
+            }
+            PortAudioRecorder::setInitialized(true);
         }
-        PortAudioRecorder::setInizialized(true);
-    }
-
-    int numDevices = Pa_GetDeviceCount();
-    if (numDevices < 0) {
-        std::cerr << "PortAudio error (listMicrophoneNames device count): " << Pa_GetErrorText(numDevices) << std::endl;
-        return names;
-    }
-
-    const PaDeviceInfo *deviceInfo;
-    for (int i = 0; i < numDevices; ++i) {
-        deviceInfo = Pa_GetDeviceInfo(i);
-        if (deviceInfo->maxInputChannels > 0) {
-            names.push_back(deviceInfo->name);
+        
+        int numDevices = Pa_GetDeviceCount();
+        if (numDevices < 0) {
+            throw AudioException("PortAudio error (listMicrophoneNames device count): " + std::string(Pa_GetErrorText(numDevices)));
         }
+        
+        const PaDeviceInfo *deviceInfo;
+        for (int i = 0; i < numDevices; ++i) {
+            deviceInfo = Pa_GetDeviceInfo(i);
+            if (deviceInfo->maxInputChannels > 0) {
+                names.push_back(deviceInfo->name);
+            }
+        }
+    } catch (const AudioException& e) {
+        std::cerr << e.what() << std::endl;
     }
+    
     return names;
-}
-
-PortAudioRecorder::PortAudioRecorder() {
-    ensure_pa_initialized();
-}
-
-PortAudioRecorder::~PortAudioRecorder() {
-    stopRecording();
-    if (stream) {
-        Pa_CloseStream(stream);
-        stream = nullptr;
-    }
 }
 
 int PortAudioRecorder::pa_callback(const void *inputBuffer, void *outputBuffer,
@@ -208,10 +454,11 @@ int PortAudioRecorder::pa_callback(const void *inputBuffer, void *outputBuffer,
                                    void *userData) {
     PortAudioRecorder *recorder = static_cast<PortAudioRecorder*>(userData);
     const int16_t *in = static_cast<const int16_t*>(inputBuffer);
-    if (inputBuffer == nullptr) {
+    
+    if (inputBuffer == nullptr || !recorder->recordingActive) {
         return paContinue;
     }
-
+    
     // Check if we should bypass VAD
     bool bypass = recorder->bypass_vad_.load();
     std::function<void(const std::vector<int16_t>&)> callback;
@@ -219,203 +466,20 @@ int PortAudioRecorder::pa_callback(const void *inputBuffer, void *outputBuffer,
         std::lock_guard<std::mutex> lock(recorder->callback_mutex_);
         callback = recorder->audioCallback;
     }
-
+    
+    std::vector<int16_t> current_chunk(in, in + framesPerBuffer);
+    
     if (bypass) {
-        std::vector<int16_t> chunk(in, in + framesPerBuffer);
         if (callback) {
-            callback(chunk);
+            callback(current_chunk);
         }
         return paContinue;
     }
-
-    std::vector<int16_t> current_chunk(in, in + framesPerBuffer);
-
-    // Calculate RMS for VAD
-    double sum_squares = 0.0;
-    for (int16_t sample : current_chunk) {
-        sum_squares += static_cast<double>(sample) * sample;
-    }
-    double rms = std::sqrt(sum_squares / framesPerBuffer);
-    int threshold = recorder->getEnergyThreshold();
-
-    {
-        std::lock_guard<std::mutex> lock(recorder->vad_buffer_mutex);
-        if (rms > threshold) {
-            // Reset silence counter on voice activity
-            recorder->consecutive_silence_chunks_ = 0;
-            recorder->vad_buffer.insert(recorder->vad_buffer.end(), current_chunk.begin(), current_chunk.end());
-        } else {
-            // Only accumulate silence if we're in a speech segment
-            if (!recorder->vad_buffer.empty()) {
-                recorder->consecutive_silence_chunks_++;
-                recorder->vad_buffer.insert(recorder->vad_buffer.end(), current_chunk.begin(), current_chunk.end());
-            }
-        }
-
-        // Send buffer if max size reached or enough trailing silence
-        if (!recorder->vad_buffer.empty() && 
-            (recorder->vad_buffer.size() >= recorder->max_buffer_samples_ || 
-             recorder->consecutive_silence_chunks_ >= recorder->max_silence_chunks_)) {
-            if (callback) {
-                callback(recorder->vad_buffer);
-            }
-            recorder->vad_buffer.clear();
-            recorder->consecutive_silence_chunks_ = 0;
-        }
-    }
+    
+    // Process with VAD
+    recorder->process_audio_with_vad(current_chunk);
+    
     return paContinue;
-}
-
-bool PortAudioRecorder::startRecording(std::function<void(const std::vector<int16_t>&)> callback, 
-                                      int sampleRate, 
-                                      double recordTimeout,
-                                      double phraseTimeout) {
-    if (recordingActive) {
-        stopRecording();
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        audioCallback = callback;
-    }
-    
-    sampleRate_ = sampleRate;
-    recordTimeout_ = recordTimeout;
-    phraseTimeout_ = phraseTimeout;
-    
-    // Calculate buffer limits
-    max_buffer_samples_ = static_cast<size_t>(sampleRate_ * recordTimeout_);
-    max_silence_chunks_ = static_cast<size_t>(std::ceil(phraseTimeout_ * sampleRate_ / FRAMES_PER_BUFFER));
-    consecutive_silence_chunks_ = 0;
-    bypass_vad_ = false;
-    recordingActive = true;
-
-    ensure_pa_initialized();
-
-    PaStreamParameters inputParameters;
-    inputParameters.device = Pa_GetDefaultInputDevice();
-    if (inputParameters.device == paNoDevice) {
-        std::cerr << "Error: No default input device." << std::endl;
-        return false;
-    }
-    
-    inputParameters.channelCount = 1;
-    inputParameters.sampleFormat = paInt16;
-    inputParameters.suggestedLatency = Pa_GetDeviceInfo(inputParameters.device)->defaultLowInputLatency;
-    inputParameters.hostApiSpecificStreamInfo = nullptr;
-
-    PaError err = Pa_OpenStream(
-        &stream,
-        &inputParameters,
-        nullptr,
-        sampleRate_,
-        FRAMES_PER_BUFFER,
-        paClipOff,
-        pa_callback,
-        this
-    );
-
-    if (err != paNoError) {
-        std::cerr << "PortAudio error (open stream): " << Pa_GetErrorText(err) << std::endl;
-        return false;
-    }
-
-    err = Pa_StartStream(stream);
-    if (err != paNoError) {
-        std::cerr << "PortAudio error (start stream): " << Pa_GetErrorText(err) << std::endl;
-        Pa_CloseStream(stream);
-        stream = nullptr;
-        return false;
-    }
-
-    std::cout << "Started recording on: " << Pa_GetDeviceInfo(inputParameters.device)->name << std::endl;
-    return true;
-}
-
-void PortAudioRecorder::stopRecording() {
-    if (recordingActive) {
-        recordingActive = false;
-        if (stream) {
-            PaError err = Pa_StopStream(stream);
-            if (err != paNoError) {
-                std::cerr << "PortAudio error (stop stream): " << Pa_GetErrorText(err) << std::endl;
-            }
-            err = Pa_CloseStream(stream);
-            if (err != paNoError) {
-                std::cerr << "PortAudio error (close stream): " << Pa_GetErrorText(err) << std::endl;
-            }
-            stream = nullptr;
-        }
-        
-        // Clear any remaining VAD buffer
-        std::lock_guard<std::mutex> lock(vad_buffer_mutex);
-        vad_buffer.clear();
-    }
-}
-
-void PortAudioRecorder::adjustForAmbientNoise(int energy_threshold) {
-    if (energy_threshold != -1) {
-        energyThreshold = energy_threshold;
-        std::cout << "Using provided energy threshold: " << energy_threshold << std::endl;
-        return;
-    }
-
-    std::cout << "Adjusting for ambient noise (listening for 3 seconds)..." << std::endl;
-    std::vector<int16_t> noise_samples;
-    std::mutex noise_mutex;
-    std::condition_variable noise_cv;
-    bool noise_collection_done = false;
-
-    // Create temporary callback
-    auto noise_callback = [&](const std::vector<int16_t>& audio_data) {
-        std::lock_guard<std::mutex> lock(noise_mutex);
-        noise_samples.insert(noise_samples.end(), audio_data.begin(), audio_data.end());
-        if (noise_samples.size() >= static_cast<size_t>(SAMPLE_RATE * 3)) {
-            noise_collection_done = true;
-            noise_cv.notify_one();
-        }
-    };
-
-    {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        audioCallback = noise_callback;
-    }
-    bypass_vad_ = true;
-
-    // Start the stream if not already running
-    bool was_running = recordingActive;
-    if (!was_running) {
-        if (!startRecording(noise_callback, sampleRate_, recordTimeout_, phraseTimeout_)) {
-            std::cerr << "Failed to start recording for ambient noise adjustment." << std::endl;
-            bypass_vad_ = false;
-            return;
-        }
-    }
-
-    // Wait for noise collection to complete
-    std::unique_lock<std::mutex> lock(noise_mutex);
-    auto status = noise_cv.wait_for(lock, std::chrono::seconds(4), [&]{ return noise_collection_done; });
-
-    bypass_vad_ = false;
-    if (!was_running) {
-        stopRecording();
-    }
-
-    if (noise_samples.empty()) {
-        std::cerr << "No noise samples collected. Using default energy threshold." << std::endl;
-        return;
-    }
-
-    // Calculate RMS of noise samples
-    double sum_squares = 0.0;
-    for (int16_t sample : noise_samples) {
-        sum_squares += static_cast<double>(sample) * sample;
-    }
-    double rms = std::sqrt(sum_squares / noise_samples.size());
-    
-    // Set threshold based on estimated noise RMS
-    energyThreshold = static_cast<int>(rms * 2.5);
-    std::cout << "Adjusted energy threshold to: " << energyThreshold << std::endl;
 }
 
 class WhisperModel {
@@ -426,13 +490,13 @@ private:
 public:
     WhisperModel(const std::string& modelPath) : model_path(modelPath) {
         if (!std::filesystem::exists(modelPath)) {
-            throw std::runtime_error("Model file does not exist: " + modelPath);
+            throw AudioException("Model file does not exist: " + modelPath);
         }
         
         std::cout << "Loading Whisper model from: " << model_path << std::endl;
         ctx = whisper_init_from_file(model_path.c_str());
         if (!ctx) {
-            throw std::runtime_error("Failed to load Whisper model from " + model_path);
+            throw AudioException("Failed to load Whisper model from " + model_path);
         }
     }
     
@@ -449,7 +513,7 @@ public:
         
         whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
         params.language = lang.c_str();
-        params.n_threads = std::min(4, static_cast<int>(std::thread::hardware_concurrency()));
+        params.n_threads = std::min(Constants::WHISPER_MAX_THREADS, static_cast<int>(std::thread::hardware_concurrency()));
         params.print_realtime = false;
         params.print_progress = false;
         params.print_timestamps = false;
@@ -471,6 +535,69 @@ public:
     }
 };
 
+class AudioTranscriber {
+private:
+    WhisperModel& model;
+    std::string language;
+    std::thread transcription_thread;
+    std::queue<std::pair<std::vector<float>, std::promise<std::string>>> transcription_queue;
+    std::mutex queue_mutex;
+    std::condition_variable queue_cv;
+    std::atomic<bool> running{false};
+    
+    void transcription_worker() {
+        while (running || !transcription_queue.empty()) {
+            std::pair<std::vector<float>, std::promise<std::string>> task;
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex);
+                queue_cv.wait(lock, [&] { return !transcription_queue.empty() || !running; });
+                
+                if (!running && transcription_queue.empty()) {
+                    break;
+                }
+                
+                if (!transcription_queue.empty()) {
+                    task = std::move(transcription_queue.front());
+                    transcription_queue.pop();
+                }
+            }
+            
+            if (!task.first.empty()) {
+                std::string result = model.transcribe(task.first, language);
+                task.second.set_value(result);
+            }
+        }
+    }
+    
+public:
+    AudioTranscriber(WhisperModel& model, const std::string& lang) 
+        : model(model), language(lang) {
+        running = true;
+        transcription_thread = std::thread(&AudioTranscriber::transcription_worker, this);
+    }
+    
+    ~AudioTranscriber() {
+        running = false;
+        queue_cv.notify_one();
+        if (transcription_thread.joinable()) {
+            transcription_thread.join();
+        }
+    }
+    
+    std::future<std::string> transcribe_async(const std::vector<float>& audio_data) {
+        std::promise<std::string> promise;
+        auto future = promise.get_future();
+        
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            transcription_queue.emplace(audio_data, std::move(promise));
+        }
+        
+        queue_cv.notify_one();
+        return future;
+    }
+};
+
 Args parse_arguments(int argc, char* argv[]) {
     Args args;
     const std::unordered_set<std::string> valid_args = {
@@ -478,7 +605,7 @@ Args parse_arguments(int argc, char* argv[]) {
         "--phrase_timeout", "--language", "--pipe", "--default_microphone",
         "--whisper_model_path", "--help", "-h", "--timestamp"
     };
-
+    
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         
@@ -492,17 +619,32 @@ Args parse_arguments(int argc, char* argv[]) {
         } else if (arg == "--non_english") {
             args.non_english = true;
         } else if (arg == "--energy_threshold" && i + 1 < argc) {
-            args.energy_threshold = std::stoi(argv[++i]);
+            try {
+                args.energy_threshold = std::stoi(argv[++i]);
+            } catch (const std::exception&) {
+                std::cerr << "Error: Invalid energy threshold value" << std::endl;
+                exit(1);
+            }
         } else if (arg == "--record_timeout" && i + 1 < argc) {
-            args.record_timeout = std::stod(argv[++i]);
-            if (args.record_timeout <= 0) {
-                std::cerr << "Error: record_timeout must be positive" << std::endl;
+            try {
+                args.record_timeout = std::stod(argv[++i]);
+                if (args.record_timeout <= 0) {
+                    std::cerr << "Error: record_timeout must be positive" << std::endl;
+                    exit(1);
+                }
+            } catch (const std::exception&) {
+                std::cerr << "Error: Invalid record_timeout value" << std::endl;
                 exit(1);
             }
         } else if (arg == "--phrase_timeout" && i + 1 < argc) {
-            args.phrase_timeout = std::stod(argv[++i]);
-            if (args.phrase_timeout <= 0) {
-                std::cerr << "Error: phrase_timeout must be positive" << std::endl;
+            try {
+                args.phrase_timeout = std::stod(argv[++i]);
+                if (args.phrase_timeout <= 0) {
+                    std::cerr << "Error: phrase_timeout must be positive" << std::endl;
+                    exit(1);
+                }
+            } catch (const std::exception&) {
+                std::cerr << "Error: Invalid phrase_timeout value" << std::endl;
                 exit(1);
             }
         } else if (arg == "--language" && i + 1 < argc) {
@@ -532,12 +674,12 @@ Args parse_arguments(int argc, char* argv[]) {
             exit(0);
         }
     }
-
+    
     if (args.whisper_model_path.empty()) {
         std::cerr << "Error: --whisper_model_path is required." << std::endl;
         exit(1);
     }
-
+    
     return args;
 }
 
@@ -568,89 +710,95 @@ std::string get_current_timestamp() {
 }
 
 int main(int argc, char* argv[]) {
-    Args args = parse_arguments(argc, argv);
-    std::chrono::time_point<std::chrono::system_clock> last_phrase_end_time;
-    bool phrase_time_set = false;
-    std::queue<std::vector<int16_t>> data_queue;
-    std::mutex queue_mutex;
-    std::condition_variable queue_cv;
-    
-    std::unique_ptr<PortAudioRecorder> recorder;
     try {
-        recorder = std::make_unique<PortAudioRecorder>();
-    } catch (const std::exception& e) {
-        std::cerr << "Failed to initialize recorder: " << e.what() << std::endl;
-        return 1;
-    }
-
-    WhisperModel audio_model(args.whisper_model_path);
-    std::vector<std::string> transcription = {""};
-
-    // Calibrate microphone if energy threshold not set
-    if (args.energy_threshold == -1) {
-        std::cout << "Calibrating microphone..." << std::endl;
-        recorder->adjustForAmbientNoise(args.energy_threshold);
-    } else {
-        recorder->setEnergyThreshold(args.energy_threshold);
-        std::cout << "Using energy threshold: " << args.energy_threshold << std::endl;
-    }
-
-    // Start continuous recording
-    auto record_callback = [&](const std::vector<int16_t>& audio_data) {
-        std::unique_lock<std::mutex> lock(queue_mutex);
-        data_queue.push(audio_data);
-        queue_cv.notify_one();
-    };
-
-    if (!recorder->startRecording(record_callback, SAMPLE_RATE, args.record_timeout, args.phrase_timeout)) {
-        std::cerr << "Failed to start continuous recording." << std::endl;
-        return 1;
-    }
-
-    if (!args.pipe) {
-        std::cout << "Model loaded and recording started.\n" << std::endl;
-    }
-
-    try {
+        Args args = parse_arguments(argc, argv);
+        std::chrono::time_point<std::chrono::system_clock> last_phrase_end_time;
+        bool phrase_time_set = false;
+        std::queue<std::vector<int16_t>> data_queue;
+        std::mutex queue_mutex;
+        std::condition_variable queue_cv;
+        
+        std::unique_ptr<PortAudioRecorder> recorder;
+        try {
+            recorder = std::make_unique<PortAudioRecorder>();
+        } catch (const AudioException& e) {
+            std::cerr << "Failed to initialize recorder: " << e.what() << std::endl;
+            return 1;
+        }
+        
+        WhisperModel audio_model(args.whisper_model_path);
+        AudioTranscriber transcriber(audio_model, args.language);
+        std::vector<std::string> transcription = {""};
+        
+        // Calibrate microphone if energy threshold not set
+        if (args.energy_threshold == -1) {
+            std::cout << "Calibrating microphone..." << std::endl;
+            recorder->adjustForAmbientNoise(args.energy_threshold);
+        } else {
+            recorder->setEnergyThreshold(args.energy_threshold);
+            std::cout << "Using energy threshold: " << args.energy_threshold << std::endl;
+        }
+        
+        // Start continuous recording
+        auto record_callback = [&](const std::vector<int16_t>& audio_data) {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            data_queue.push(audio_data);
+            queue_cv.notify_one();
+        };
+        
+        if (!recorder->startRecording(record_callback, Constants::SAMPLE_RATE, args.record_timeout, args.phrase_timeout)) {
+            std::cerr << "Failed to start continuous recording." << std::endl;
+            return 1;
+        }
+        
+        if (!args.pipe) {
+            std::cout << "Model loaded and recording started.\n" << std::endl;
+        }
+        
         while (true) {
             std::vector<int16_t> audio_data;
             {
                 std::unique_lock<std::mutex> lock(queue_mutex);
-                if (queue_cv.wait_for(lock, std::chrono::milliseconds(250), [&]{ return !data_queue.empty(); })) {
+                if (queue_cv.wait_for(lock, std::chrono::milliseconds(Constants::MAIN_LOOP_TIMEOUT_MS), 
+                                     [&]{ return !data_queue.empty(); })) {
                     audio_data = std::move(data_queue.front());
                     data_queue.pop();
                 }
             }
-
+            
             auto now = std::chrono::system_clock::now();
             bool phrase_complete = false;
             if (phrase_time_set && (now - last_phrase_end_time) > std::chrono::duration<double>(args.phrase_timeout)) {
                 phrase_complete = true;
             }
-
+            
             if (!audio_data.empty()) {
                 last_phrase_end_time = now;
                 phrase_time_set = true;
-
+                
                 // Pad audio to minimum length if needed
-                if (audio_data.size() < MIN_AUDIO_SAMPLES) {
-                    audio_data.resize(MIN_AUDIO_SAMPLES, 0);
+                if (audio_data.size() < Constants::MIN_AUDIO_SAMPLES) {
+                    audio_data.resize(Constants::MIN_AUDIO_SAMPLES, 0);
                 }
-
+                
                 // Convert to float and normalize
                 std::vector<float> audio_np(audio_data.size());
                 for (size_t i = 0; i < audio_data.size(); ++i) {
                     audio_np[i] = static_cast<float>(audio_data[i]) / 32768.0f;
                 }
-
-                std::string text = audio_model.transcribe(audio_np, args.language);
+                
+                // Start asynchronous transcription
+                auto future_text = transcriber.transcribe_async(audio_np);
+                
+                // Wait for transcription to complete
+                std::string text = future_text.get();
                 text = trim(text);
-
+                
                 // Skip empty transcriptions
                 if (text.empty()) {
                     continue;
                 }
-
+                
                 if (args.pipe) {
                     if (args.timestamp) {
                         std::cout << get_current_timestamp() << " " << text << std::endl;
@@ -672,7 +820,8 @@ int main(int argc, char* argv[]) {
                     std::cout << std::flush;
                 }
             } else {
-                if (phrase_time_set && (now - last_phrase_end_time) > std::chrono::duration<double>(args.phrase_timeout * 1.5)) {
+                if (phrase_time_set && (now - last_phrase_end_time) > 
+                    std::chrono::duration<double>(args.phrase_timeout * Constants::PHRASE_TIMEOUT_MULTIPLIER)) {
                     if (!transcription.back().empty()) {
                         transcription.push_back("");
                     }
@@ -680,20 +829,13 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+    } catch (const AudioException& e) {
+        std::cerr << "An error occurred: " << e.what() << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "An error occurred: " << e.what() << std::endl;
     } catch (...) {
         std::cerr << "An unknown error occurred." << std::endl;
     }
-
-    recorder->stopRecording();
-    if (!args.pipe && !transcription.empty()) {
-        std::cout << "\n\nTranscription:" << std::endl;
-        for (const auto& line : transcription) {
-            if (!line.empty()) {
-                std::cout << line << std::endl;
-            }
-        }
-    }
+    
     return 0;
 }
