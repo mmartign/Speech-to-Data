@@ -46,6 +46,8 @@
 #include <memory>
 #include <future>
 
+#define __linux__
+
 // PortAudio includes
 #include "portaudio.h"
 // whisper.cpp includes
@@ -132,6 +134,7 @@ struct Args {
     bool timestamp = false;
     std::string default_microphone;
     std::string whisper_model_path;
+    bool list_microphones = false;
 };
 
 class AudioRecorder {
@@ -603,7 +606,7 @@ Args parse_arguments(int argc, char* argv[]) {
     const std::unordered_set<std::string> valid_args = {
         "--model", "--non_english", "--energy_threshold", "--record_timeout",
         "--phrase_timeout", "--language", "--pipe", "--default_microphone",
-        "--whisper_model_path", "--help", "-h", "--timestamp"
+        "--whisper_model_path", "--help", "-h", "--timestamp", "--list-microphones"
     };
     
     for (int i = 1; i < argc; ++i) {
@@ -657,6 +660,8 @@ Args parse_arguments(int argc, char* argv[]) {
             args.default_microphone = argv[++i];
         } else if (arg == "--whisper_model_path" && i + 1 < argc) {
             args.whisper_model_path = argv[++i];
+        } else if (arg == "--list-microphones") {
+            args.list_microphones = true;
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << argv[0] << " [options]\n"
                       << "  --model <name>            Model to use (tiny, base, small, medium, large). Default: medium\n"
@@ -667,15 +672,16 @@ Args parse_arguments(int argc, char* argv[]) {
                       << "  --language <lang>         Language for transcription (de, en, es, fr, he, it, sv). Default: en\n"
                       << "  --pipe                    Enable pipe mode for continuous streaming.\n"
                       << "  --timestamp               Print timestamps before each line in pipe mode.\n"
-                      << "  --whisper_model_path <path> REQUIRED: Path to the ggml Whisper model file\n";
+                      << "  --whisper_model_path <path> REQUIRED: Path to the ggml Whisper model file\n"
+                      << "  --list-microphones        List available microphones and exit\n";
             #ifdef __linux__
-            std::cout << "  --default_microphone <name> Default microphone name. Use 'list' to see options.\n";
+            std::cout << "  --default_microphone <name> Default microphone name. Use '--list-microphones' to see options.\n";
             #endif
             exit(0);
         }
     }
     
-    if (args.whisper_model_path.empty()) {
+    if (args.whisper_model_path.empty() && !args.list_microphones) {
         std::cerr << "Error: --whisper_model_path is required." << std::endl;
         exit(1);
     }
@@ -709,9 +715,32 @@ std::string get_current_timestamp() {
     return oss.str();
 }
 
+void list_and_exit() {
+    try {
+        std::vector<std::string> mics = AudioRecorder::listMicrophoneNames();
+        if (mics.empty()) {
+            std::cout << "No microphones found." << std::endl;
+        } else {
+            std::cout << "Available microphones:" << std::endl;
+            for (size_t i = 0; i < mics.size(); ++i) {
+                std::cout << "  " << (i + 1) << ". " << mics[i] << std::endl;
+            }
+        }
+        exit(0);
+    } catch (const std::exception& e) {
+        std::cerr << "Error listing microphones: " << e.what() << std::endl;
+        exit(1);
+    }
+}
+
 int main(int argc, char* argv[]) {
     try {
         Args args = parse_arguments(argc, argv);
+        
+        if (args.list_microphones) {
+            list_and_exit();
+        }
+        
         std::chrono::time_point<std::chrono::system_clock> last_phrase_end_time;
         bool phrase_time_set = false;
         std::queue<std::vector<int16_t>> data_queue;
