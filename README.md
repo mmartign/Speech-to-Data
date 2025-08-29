@@ -1,7 +1,6 @@
 🚀 **Real-Time Medical Speech-to-Data Pipeline**
 
-[Speech-to-Data-Architecture.drawio.pdf](https://github.com/user-attachments/files/22038476/Speech-to-Data-Architecture.drawio.pdf)
-
+<img width="736" height="351" alt="Speech-to-Data-Architecture drawio" src="https://github.com/user-attachments/assets/3f658388-d68f-479d-ba20-e76149c4391c" />
 
 We're excited to share a new step in our research at Spazio IT, where we're exploring real-time audio-to-knowledge pipelines using cutting-edge AI technologies — all running on a single, high-performance machine. Here's a snapshot of what we're building:
 
