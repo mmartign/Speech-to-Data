@@ -21,8 +21,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see https://www.gnu.org/licenses/.
 //
-// SPDX-License-Identifier: GPL-2.0-or-later
-// Spazio IT Speech-to-Data C++ version
 #include <iostream>
 #include <fstream>
 #include <sstream>
