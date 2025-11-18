@@ -65,6 +65,9 @@ namespace Constants {
     constexpr size_t MIN_AUDIO_SAMPLES = static_cast<size_t>(SAMPLE_RATE * MIN_AUDIO_LENGTH_MS / 1000.0);
     constexpr double AMBIENT_NOISE_DURATION_SECONDS = 3.0;
     constexpr double ENERGY_THRESHOLD_MULTIPLIER = 2.5;
+    constexpr double ADAPTIVE_NOISE_ALPHA = 0.05;        // smoothing factor for silence RMS
+    constexpr double ADAPTIVE_THRESHOLD_STEP_FRACTION = 0.05; // max fraction change per tick
+    constexpr int ADAPTIVE_THRESHOLD_MIN = 200;          // don't drop below this amplitude
     constexpr int WHISPER_MAX_THREADS = 4;
     constexpr int MAIN_LOOP_TIMEOUT_MS = 250;
     constexpr double PHRASE_TIMEOUT_MULTIPLIER = 1.5;
@@ -140,6 +143,7 @@ struct Args {
     std::string model = "medium";
     bool non_english = false;
     int energy_threshold = -1;
+    bool adaptive_energy = false;
     double record_timeout = 2.0;
     double phrase_timeout = 3.0;
     std::string language = "en";
@@ -164,6 +168,7 @@ public:
     virtual void adjustForAmbientNoise(int energy_threshold) = 0;
     virtual void setEnergyThreshold(int threshold) = 0;
     virtual int getEnergyThreshold() const = 0;
+    virtual void setAdaptiveEnergyEnabled(bool enabled) = 0;
     virtual void setPreferredDeviceName(const std::string& name) = 0;
 
     static std::vector<std::string> listMicrophoneNames();
@@ -191,6 +196,9 @@ private:
     size_t max_silence_chunks_ = 0;
 
     std::atomic<bool> bypass_vad_{false};
+    std::atomic<bool> adaptive_energy_enabled_{false};
+    std::atomic<double> silence_rms_ema_{0.0};
+    std::atomic<bool> silence_floor_initialized_{false};
 
     // VAD state
     std::vector<int16_t> vad_buffer;
@@ -300,6 +308,57 @@ private:
         return sum_squares;
     }
 
+    void update_adaptive_threshold(double sum_squares, size_t sample_count) {
+        if (!adaptive_energy_enabled_.load(std::memory_order_relaxed) || sample_count == 0) {
+            return;
+        }
+
+        double rms = std::sqrt(sum_squares / static_cast<double>(sample_count));
+        if (rms <= 0.0) {
+            return;
+        }
+
+        if (!silence_floor_initialized_.load(std::memory_order_acquire)) {
+            silence_rms_ema_.store(rms, std::memory_order_release);
+            silence_floor_initialized_.store(true, std::memory_order_release);
+            return;
+        }
+
+        double prev = silence_rms_ema_.load(std::memory_order_relaxed);
+        double updated = (1.0 - Constants::ADAPTIVE_NOISE_ALPHA) * prev +
+                         Constants::ADAPTIVE_NOISE_ALPHA * rms;
+        silence_rms_ema_.store(updated, std::memory_order_release);
+
+        double desired = updated * Constants::ENERGY_THRESHOLD_MULTIPLIER;
+        if (desired < static_cast<double>(Constants::ADAPTIVE_THRESHOLD_MIN)) {
+            desired = static_cast<double>(Constants::ADAPTIVE_THRESHOLD_MIN);
+        }
+
+        int current = getEnergyThreshold();
+        int target = static_cast<int>(desired);
+
+        int max_step = std::max(5, static_cast<int>(current * Constants::ADAPTIVE_THRESHOLD_STEP_FRACTION));
+        if (max_step < 1) max_step = 1;
+
+        if (target > current + max_step) {
+            target = current + max_step;
+        } else if (target < current - max_step) {
+            target = current - max_step;
+        }
+
+        if (target != current) {
+            setEnergyThreshold(target);
+        }
+    }
+
+    void prime_noise_floor_estimate(double rms) {
+        if (rms <= 0.0) {
+            return;
+        }
+        silence_rms_ema_.store(rms, std::memory_order_release);
+        silence_floor_initialized_.store(true, std::memory_order_release);
+    }
+
     void process_audio_with_vad(const std::vector<int16_t>& current_chunk,
                                 size_t framesPerBuffer,
                                 const std::function<void(const std::vector<int16_t>&)>& cb) {
@@ -307,6 +366,10 @@ private:
         double sum_squares = calculate_audio_energy(current_chunk.data(), current_chunk.size());
         double threshold_squared = static_cast<double>(energyThresholdSquared.load(std::memory_order_relaxed));
         bool is_speech = sum_squares > (threshold_squared * current_chunk.size());
+
+        if (!is_speech) {
+            update_adaptive_threshold(sum_squares, current_chunk.size());
+        }
 
         {
             std::lock_guard<std::mutex> lock(vad_buffer_mutex);
@@ -492,6 +555,9 @@ public:
         long double rms = std::sqrt(sum_squares / static_cast<long double>(noise_samples.size()));
         int threshold = static_cast<int>(rms * Constants::ENERGY_THRESHOLD_MULTIPLIER);
         setEnergyThreshold(threshold);
+        if (adaptive_energy_enabled_.load(std::memory_order_relaxed)) {
+            prime_noise_floor_estimate(static_cast<double>(rms));
+        }
         std::cout << "Adjusted energy threshold to: " << threshold << std::endl;
     }
 
@@ -502,6 +568,22 @@ public:
     }
 
     int getEnergyThreshold() const override { return energyThreshold.load(std::memory_order_relaxed); }
+
+    void setAdaptiveEnergyEnabled(bool enabled) override {
+        adaptive_energy_enabled_.store(enabled, std::memory_order_release);
+        if (!enabled) {
+            silence_floor_initialized_.store(false, std::memory_order_release);
+            return;
+        }
+
+        double estimate = static_cast<double>(getEnergyThreshold()) /
+                          Constants::ENERGY_THRESHOLD_MULTIPLIER;
+        if (estimate <= 0.0) {
+            estimate = static_cast<double>(Constants::ADAPTIVE_THRESHOLD_MIN) /
+                       Constants::ENERGY_THRESHOLD_MULTIPLIER;
+        }
+        prime_noise_floor_estimate(estimate);
+    }
 
     // For tests / status
     static bool isInitialized() { return pa_initialized.load(); }
@@ -682,7 +764,8 @@ Args parse_arguments(int argc, char* argv[]) {
     const std::unordered_set<std::string> valid_args = {
         "--model", "--non_english", "--energy_threshold", "--record_timeout",
         "--phrase_timeout", "--language", "--pipe", "--default_microphone",
-        "--whisper_model_path", "--help", "-h", "--timestamp", "--list_microphones"
+        "--whisper_model_path", "--help", "-h", "--timestamp", "--list_microphones",
+        "--adaptive_energy"
     };
 
     for (int i = 1; i < argc; ++i) {
@@ -732,6 +815,8 @@ Args parse_arguments(int argc, char* argv[]) {
             args.pipe = true;
         } else if (arg == "--timestamp") {
             args.timestamp = true;
+        } else if (arg == "--adaptive_energy") {
+            args.adaptive_energy = true;
         } else if (arg == "--default_microphone" && i + 1 < argc) {
             args.default_microphone = argv[++i];
         } else if (arg == "--whisper_model_path" && i + 1 < argc) {
@@ -743,6 +828,7 @@ Args parse_arguments(int argc, char* argv[]) {
                       << "  --model <name>            Model to use (tiny, base, small, medium, large). Default: medium\n"
                       << "  --non_english             Don't use the English-specific model variant.\n"
                       << "  --energy_threshold <int>  Energy level for mic to detect. Default: auto-adjust\n"
+                      << "  --adaptive_energy         Continuously adapt the energy threshold based on silence.\n"
                       << "  --record_timeout <float>  Max duration for audio chunks (seconds). Default: 2.0\n"
                       << "  --phrase_timeout <float>  Silence duration to end a phrase (seconds). Default: 3.0\n"
                       << "  --language <lang>         Language (de, en, es, fr, he, it, sv). Default: en\n"
@@ -866,6 +952,11 @@ int main(int argc, char* argv[]) {
         } else {
             recorder->setEnergyThreshold(args.energy_threshold);
             std::cout << "Using energy threshold: " << args.energy_threshold << std::endl;
+        }
+
+        recorder->setAdaptiveEnergyEnabled(args.adaptive_energy);
+        if (args.adaptive_energy) {
+            std::cout << "Adaptive energy threshold enabled (EMA over silence)." << std::endl;
         }
 
         // Start continuous recording

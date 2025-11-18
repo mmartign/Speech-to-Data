@@ -21,8 +21,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see https://www.gnu.org/licenses/.
 //
-#include <iostream>
 #include <fstream>
+#include <cstdlib>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <map>
@@ -48,6 +49,7 @@ std::string TRIGGER_STOP;
 std::mutex analysis_mutex;
 std::atomic<int> counter_value{0};
 std::atomic<bool> in_analysis{false};
+std::mutex tts_mutex;
 
 class AnalysisSession {
 public:
@@ -62,6 +64,48 @@ private:
     std::unique_lock<std::mutex> lock_;
     std::atomic<bool>& state_;
 };
+
+std::string strip_trailing_newlines(std::string text) {
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+        text.pop_back();
+    }
+    return text;
+}
+
+std::string escape_for_quotes(const std::string& text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char c : text) {
+        if (c == '\\' || c == '\"') {
+            escaped.push_back('\\');
+        }
+        escaped.push_back(c);
+    }
+    return escaped;
+}
+
+void speak_text(const std::string& text) {
+    const std::string trimmed = strip_trailing_newlines(text);
+    if (trimmed.empty()) {
+        return;
+    }
+
+    const std::string escaped = escape_for_quotes(trimmed);
+    const std::string cmd = "say -v Alex \"" + escaped + "\" >/dev/null 2>&1 &";
+
+    std::lock_guard<std::mutex> lock(tts_mutex);
+    std::system(cmd.c_str());
+}
+
+void say_info(const std::string& message) {
+    std::cout << message;
+    speak_text(message);
+}
+
+void say_error(const std::string& message) {
+    std::cerr << message;
+    speak_text(message);
+}
 
 // Simple INI parser
 std::map<std::string, std::string> parse_ini(const std::string& filename) {
@@ -103,7 +147,7 @@ std::map<std::string, std::string> parse_ini(const std::string& filename) {
 bool load_config(const std::string& path) {
     std::ifstream file_check(path);
     if (!file_check.is_open()) {
-        std::cerr << "Unable to open config file: " << path << "\n";
+        say_error("Unable to open config file: " + path + "\n");
         return false;
     }
     file_check.close();
@@ -131,11 +175,13 @@ bool load_config(const std::string& path) {
     KNOWLEDGE_BASE_IDS = (kb_it != config.end()) ? kb_it->second : std::string{};
 
     if (!missing_keys.empty()) {
-        std::cerr << "Missing required config values:";
+        std::ostringstream oss;
+        oss << "Missing required config values:";
         for (const auto& key : missing_keys) {
-            std::cerr << ' ' << key;
+            oss << ' ' << key;
         }
-        std::cerr << "\n";
+        oss << "\n";
+        say_error(oss.str());
         return false;
     }
 
@@ -143,7 +189,7 @@ bool load_config(const std::string& path) {
     std::transform(TRIGGER_STOP.begin(), TRIGGER_STOP.end(), TRIGGER_STOP.begin(), ::tolower);
 
     if (KNOWLEDGE_BASE_IDS.empty()) {
-        std::cerr << "Warning: analysis.knowledge_base_ids is not set; knowledge base lookups will be skipped.\n";
+        say_error("Warning: analysis.knowledge_base_ids is not set; knowledge base lookups will be skipped.\n");
     }
 
     return true;
@@ -158,13 +204,13 @@ bool contains_substring(const std::string& str, const std::string& sub) {
 void analyze_text(const std::string& text) {
     AnalysisSession session(analysis_mutex, in_analysis);
     const int analysis_id = ++counter_value;
-    std::cout << "Analysis of Recording[" << analysis_id << "] Started ------------------->>>\n";
+    say_info("Analysis of Recording[" + std::to_string(analysis_id) + "] Started ------------------->>>\n");
 
     const std::string filename = "results_analysis" + std::to_string(analysis_id) + ".txt";
     std::ofstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "[ERROR] Unable to open results file: " << filename << "\n";
-        std::cout << "Analysis of Recording[" << analysis_id << "] Finished ------------------->>>\n";
+        say_error("[ERROR] Unable to open results file: " + filename + "\n");
+        say_info("Analysis of Recording[" + std::to_string(analysis_id) + "] Finished ------------------->>>\n");
         return;
     }
 
@@ -173,7 +219,7 @@ void analyze_text(const std::string& text) {
     file << "Prompt: " << PROMPT << "\n" << text << "\n";
 
     if (!file) {
-        std::cerr << "[ERROR] Failed to write analysis header to " << filename << "\n";
+        say_error("[ERROR] Failed to write analysis header to " + filename + "\n");
     }
 
     try {
@@ -201,31 +247,31 @@ void analyze_text(const std::string& text) {
         file << "\n\nFull response received:\n" << response_string << "\n";
     } catch (const std::exception& e) {
         file << "\n[ERROR] Analysis[" << analysis_id << "] failed: " << e.what() << "\n";
-        std::cerr << "[ERROR] Analysis[" << analysis_id << "] failed: " << e.what() << "\n";
+        say_error(std::string{"[ERROR] Analysis["} + std::to_string(analysis_id) + "] failed: " + e.what() + "\n");
     }
 
     if (!file) {
-        std::cerr << "[ERROR] Writing to results file failed for Analysis[" << analysis_id << "]\n";
+        say_error("[ERROR] Writing to results file failed for Analysis[" + std::to_string(analysis_id) + "]\n");
     }
 
-    std::cout << "Analysis of Recording[" << analysis_id << "] Finished ------------------->>>\n";
+    say_info("Analysis of Recording[" + std::to_string(analysis_id) + "] Finished ------------------->>>\n");
 }
 
 // Main loop
 int main() {
     if (!load_config("./config.ini")) {
-        std::cerr << "Failed to load config.ini\n";
+        say_error("Failed to load config.ini\n");
         return 1;
     }
 
-    std::cout << "Listening for input...\n";
+    say_info("Listening for input...\n");
 
     std::string line;
     std::string collected_text;
     bool collect_text = false;
 
     while (std::getline(std::cin, line)) {
-        std::cout << line << "\n";
+        std::cout << line << std::endl;
 
         std::string lower_line = line;
         std::transform(lower_line.begin(), lower_line.end(), lower_line.begin(), ::tolower);
@@ -235,9 +281,9 @@ int main() {
 
         if (line_contains_start) {
             if (collect_text) {
-                std::cout << "Recording has already been started ------------------->>>\n";
+                say_info("Recording has already been started ------------------->>>\n");
             } else {
-                std::cout << "Recording started ------------------->>>\n";
+                say_info("Recording started ------------------->>>\n");
                 collected_text.clear();
                 collect_text = true;
             }
@@ -245,11 +291,11 @@ int main() {
 
         if (line_contains_stop) {
             if (!collect_text) {
-                std::cout << "No recording is currently running ------------------->>>\n";
+                say_info("No recording is currently running ------------------->>>\n");
             } else if (in_analysis) {
-                std::cout << "A previous recording is still being analyzed ------------------->>>\n";
+                say_info("A previous recording is still being analyzed ------------------->>>\n");
             } else {
-                std::cout << "Recording stopped ------------------->>>\n";
+                say_info("Recording stopped ------------------->>>\n");
                 std::string text_to_analyze = collected_text;
                 collected_text.clear();
                 collect_text = false;
