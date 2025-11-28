@@ -76,6 +76,9 @@ While individual components of Spazio IT's pipeline exist in the market, **the *
 5.  **Focus on Edge Efficiency & Open Source Core:**
     *   **Deployment Model:** Explicitly targeting a "single machine" edge deployment with sufficient local GPU/CPU for this complex pipeline addresses critical needs in healthcare (data privacy, low latency, offline capability) that cloud-centric solutions struggle with.
     *   **Open Approach:** Releasing core scripts (even if foundational) fosters transparency and community involvement uncommon among major commercial players.
+  
+6.   **Bidirectional voice interaction:**
+     *   **Full bidirectional voice interaction**: SI-Listener can now provide immediate spoken feedback in addition to receiving voice commands. This feature transforms the system from a passive listener into an active conversational partner. Users can receive confirmations, clarifications, operational guidance, and contextual responses, all generated in real time and without relying on cloud services.
 
 **In Summary:**
 
