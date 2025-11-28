@@ -91,7 +91,7 @@ void speak_text(const std::string& text) {
     }
 
     const std::string escaped = escape_for_quotes(trimmed);
-    const std::string cmd = "say -v Alex \"" + escaped + "\" >/dev/null 2>&1 &";
+    const std::string cmd = "say \"" + escaped + "\" >/dev/null 2>&1 &";
 
     std::lock_guard<std::mutex> lock(tts_mutex);
     std::system(cmd.c_str());
@@ -200,6 +200,46 @@ bool contains_substring(const std::string& str, const std::string& sub) {
     return sub.empty() || str.find(sub) != std::string::npos;
 }
 
+// Safely extract a textual message content from an OpenAI-style response
+std::string extract_message_content(const json& response) {
+    const auto choices_it = response.find("choices");
+    if (choices_it == response.end() || !choices_it->is_array() || choices_it->empty()) {
+        return {};
+    }
+
+    const auto& first_choice = (*choices_it)[0];
+    if (!first_choice.is_object()) {
+        return {};
+    }
+
+    const auto message_it = first_choice.find("message");
+    if (message_it == first_choice.end() || !message_it->is_object()) {
+        return {};
+    }
+
+    const auto content_it = message_it->find("content");
+    if (content_it == message_it->end()) {
+        return {};
+    }
+
+    if (content_it->is_string()) {
+        return content_it->get<std::string>();
+    }
+
+    if (content_it->is_array()) {
+        std::string combined;
+        for (const auto& part : *content_it) {
+            if (!combined.empty()) {
+                combined.push_back('\n');
+            }
+            combined += part.is_string() ? part.get<std::string>() : part.dump();
+        }
+        return combined;
+    }
+
+    return {};
+}
+
 // AI analysis with fresh context for each request
 void analyze_text(const std::string& text) {
     AnalysisSession session(analysis_mutex, in_analysis);
@@ -222,6 +262,8 @@ void analyze_text(const std::string& text) {
         say_error("[ERROR] Failed to write analysis header to " + filename + "\n");
     }
 
+    std::string response_string;
+
     try {
         openai::start({
             API_KEY
@@ -242,12 +284,47 @@ void analyze_text(const std::string& text) {
         }
 
         auto chat = openai::chat().create(body);
-        const std::string response_string = chat["choices"][0]["message"]["content"].get<std::string>();
+        response_string = extract_message_content(chat);
+        if (response_string.empty()) {
+            file << "\n[WARN] No textual content found in primary response. Full payload:\n"
+                 << chat.dump(2) << "\n";
+            say_error(std::string{"[WARN] Analysis["} + std::to_string(analysis_id) +
+                      "] returned no text content; see results file.\n");
+        }
 
         file << "\n\nFull response received:\n" << response_string << "\n";
     } catch (const std::exception& e) {
         file << "\n[ERROR] Analysis[" << analysis_id << "] failed: " << e.what() << "\n";
         say_error(std::string{"[ERROR] Analysis["} + std::to_string(analysis_id) + "] failed: " + e.what() + "\n");
+    }
+
+    if (!response_string.empty()) {
+        try {
+            json summary_body = {
+                {"model", MODEL_NAME},
+                {"messages", {
+                    {{"role", "system"}, {"content", "You are a helpful assistant."}},
+                    {{"role", "user"}, {"content", "Provide a concise summary of the following text, Keep it short and informative.\n" + response_string + "\n\n"}}
+                }},
+                {"stream", false},
+                {"enable_websearch", false}
+            };
+
+            auto summary_chat = openai::chat().create(summary_body);
+            const std::string summary_string = extract_message_content(summary_chat);
+            if (summary_string.empty()) {
+                file << "\n[WARN] No textual summary returned. Full payload:\n"
+                     << summary_chat.dump(2) << "\n";
+                say_error(std::string{"[WARN] Summary generation returned no text for Analysis["} +
+                          std::to_string(analysis_id) + "]; see results file.\n");
+            }
+
+            file << "\nShort summary of response:\n" << summary_string << "\n";
+            speak_text("Analysis[" + std::to_string(analysis_id) + "] completed. Summary: " + summary_string);
+        } catch (const std::exception& e) {
+            file << "\n[ERROR] Summary generation failed: " << e.what() << "\n";
+            say_error(std::string{"[ERROR] Summary generation failed for Analysis["} + std::to_string(analysis_id) + "]: " + e.what() + "\n");
+        }
     }
 
     if (!file) {
