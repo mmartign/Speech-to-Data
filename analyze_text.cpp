@@ -43,26 +43,31 @@ std::string API_KEY;
 std::string MODEL_NAME;
 std::string KNOWLEDGE_BASE_IDS;
 std::string PROMPT;
+std::string TEMP_PROMPT;
 std::string TRIGGER_START;
 std::string TRIGGER_STOP;
+std::string TRIGGER_TEMP_CHECK;
 
 std::mutex analysis_mutex;
 std::atomic<int> counter_value{0};
-std::atomic<bool> in_analysis{false};
+std::atomic<int> active_analyses{0};
 std::mutex tts_mutex;
+std::once_flag openai_init_flag;
 
 class AnalysisSession {
 public:
-    AnalysisSession(std::mutex& mutex, std::atomic<bool>& state)
-        : lock_(mutex), state_(state) {}
+    AnalysisSession(std::mutex& mutex, std::atomic<int>& active_count)
+        : lock_(mutex), active_count_(active_count) {
+        ++active_count_;
+    }
 
     ~AnalysisSession() {
-        state_ = false;
+        --active_count_;
     }
 
 private:
     std::unique_lock<std::mutex> lock_;
-    std::atomic<bool>& state_;
+    std::atomic<int>& active_count_;
 };
 
 std::string strip_trailing_newlines(std::string text) {
@@ -85,10 +90,12 @@ std::string escape_for_quotes(const std::string& text) {
 }
 
 void speak_text(const std::string& text) {
-    const std::string trimmed = strip_trailing_newlines(text);
+    std::string trimmed = strip_trailing_newlines(text);
     if (trimmed.empty()) {
         return;
     }
+
+    trimmed = "Announciator: " + trimmed;
 
     const std::string escaped = escape_for_quotes(trimmed);
     const std::string cmd = "say \"" + escaped + "\" >/dev/null 2>&1 &";
@@ -168,8 +175,10 @@ bool load_config(const std::string& path) {
     require_value("openai.api_key", API_KEY);
     require_value("openai.model_name", MODEL_NAME);
     require_value("prompts.prompt", PROMPT);
+    require_value("prompts.temp_prompt", TEMP_PROMPT);
     require_value("triggers.start", TRIGGER_START);
     require_value("triggers.stop", TRIGGER_STOP);
+    require_value("triggers.temp_check", TRIGGER_TEMP_CHECK);
 
     auto kb_it = config.find("analysis.knowledge_base_ids");
     KNOWLEDGE_BASE_IDS = (kb_it != config.end()) ? kb_it->second : std::string{};
@@ -187,6 +196,7 @@ bool load_config(const std::string& path) {
 
     std::transform(TRIGGER_START.begin(), TRIGGER_START.end(), TRIGGER_START.begin(), ::tolower);
     std::transform(TRIGGER_STOP.begin(), TRIGGER_STOP.end(), TRIGGER_STOP.begin(), ::tolower);
+    std::transform(TRIGGER_TEMP_CHECK.begin(), TRIGGER_TEMP_CHECK.end(), TRIGGER_TEMP_CHECK.begin(), ::tolower);
 
     if (KNOWLEDGE_BASE_IDS.empty()) {
         say_error("Warning: analysis.knowledge_base_ids is not set; knowledge base lookups will be skipped.\n");
@@ -242,7 +252,7 @@ std::string extract_message_content(const json& response) {
 
 // AI analysis with fresh context for each request
 void analyze_text(const std::string& text) {
-    AnalysisSession session(analysis_mutex, in_analysis);
+    AnalysisSession session(analysis_mutex, active_analyses);
     const int analysis_id = ++counter_value;
     say_info("Analysis of Recording[" + std::to_string(analysis_id) + "] Started ------------------->>>\n");
 
@@ -334,6 +344,71 @@ void analyze_text(const std::string& text) {
     say_info("Analysis of Recording[" + std::to_string(analysis_id) + "] Finished ------------------->>>\n");
 }
 
+void temp_analyze_text(const std::string& text) {
+    AnalysisSession session(analysis_mutex, active_analyses);
+    const int analysis_id = ++counter_value;
+    say_info("Temporary_Analysis of Recording[" + std::to_string(analysis_id) + "] Started ------------------->>>\n");
+
+    const std::string filename = "tmp_results_analysis" + std::to_string(analysis_id) + ".txt";
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        say_error("[ERROR] Unable to open results file: " + filename + "\n");
+        say_info("Temporary Analysis of Recording[" + std::to_string(analysis_id) + "] Finished ------------------->>>\n");
+        return;
+    }
+
+    file << "Using model: " << MODEL_NAME << "\n";
+    file << "Endpoint: " << OPENWEBUI_URL << "\n";
+    file << "Prompt: " << TEMP_PROMPT << "\n" << text << "\n";
+
+    if (!file) {
+        say_error("[ERROR] Failed to write analysis header to " + filename + "\n");
+    }
+
+    std::string response_string;
+
+    try {
+        openai::start({
+            API_KEY
+        });
+
+        json body = {
+            {"model", MODEL_NAME},
+            {"messages", {
+                {{"role", "system"}, {"content", "You are a helpful assistant."}},
+                {{"role", "user"}, {"content", TEMP_PROMPT + "\n" + text}}
+            }},
+            {"stream", false},
+            {"enable_websearch", true}
+        };
+
+        if (!KNOWLEDGE_BASE_IDS.empty()) {
+            body["knowledge_base_ids"] = json::array({KNOWLEDGE_BASE_IDS});
+        }
+
+        auto chat = openai::chat().create(body);
+        response_string = extract_message_content(chat);
+        if (response_string.empty()) {
+            file << "\n[WARN] No textual content found in temporary response. Full payload:\n"
+                 << chat.dump(2) << "\n";
+            say_error(std::string{"[WARN] Analysis["} + std::to_string(analysis_id) +
+                      "] returned no text content; see results file.\n");
+        }
+
+        file << "\n\nTemporary response received:\n" << response_string << "\n";
+        speak_text("Temporary Analysis[" + std::to_string(analysis_id) + "] completed. Response: " + response_string);
+    } catch (const std::exception& e) {
+        file << "\n[ERROR] Analysis[" << analysis_id << "] failed: " << e.what() << "\n";
+        say_error(std::string{"[ERROR] Analysis["} + std::to_string(analysis_id) + "] failed: " + e.what() + "\n");
+    }
+
+    if (!file) {
+        say_error("[ERROR] Writing to results file failed for Analysis[" + std::to_string(analysis_id) + "]\n");
+    }
+
+    say_info("Temporary Analysis of Recording[" + std::to_string(analysis_id) + "] Finished ------------------->>>\n");
+}
+
 // Main loop
 int main() {
     if (!load_config("./config.ini")) {
@@ -355,6 +430,7 @@ int main() {
 
         const bool line_contains_start = contains_substring(lower_line, TRIGGER_START);
         const bool line_contains_stop = contains_substring(lower_line, TRIGGER_STOP);
+        const bool line_contains_temp_check = contains_substring(lower_line, TRIGGER_TEMP_CHECK);
 
         if (line_contains_start) {
             if (collect_text) {
@@ -369,19 +445,32 @@ int main() {
         if (line_contains_stop) {
             if (!collect_text) {
                 say_info("No recording is currently running ------------------->>>\n");
-            } else if (in_analysis) {
-                say_info("A previous recording is still being analyzed ------------------->>>\n");
             } else {
                 say_info("Recording stopped ------------------->>>\n");
                 std::string text_to_analyze = collected_text;
                 collected_text.clear();
                 collect_text = false;
-                in_analysis = true;
+                if (active_analyses.load() > 0) {
+                    say_info("Another analysis is running; this one will start once it finishes ------------------->>>\n");
+                }
                 std::thread(analyze_text, std::move(text_to_analyze)).detach();
             }
         }
 
-        if (collect_text && !line_contains_start && !line_contains_stop) {
+        if (line_contains_temp_check) {
+            if (!collect_text) {
+                say_info("No recording is currently running ------------------->>>\n");
+            } else {
+                say_info("Temporary check requested ------------------->>>\n");
+                if (active_analyses.load() > 0) {
+                    say_info("Another analysis is running; this one will start once it finishes ------------------->>>\n");
+                }
+                std::string snapshot = collected_text;
+                std::thread(temp_analyze_text, std::move(snapshot)).detach();
+            }
+        }
+
+        if (collect_text && !line_contains_start && !line_contains_stop && !line_contains_temp_check) {
             collected_text += line + "\n";
         }
     }
