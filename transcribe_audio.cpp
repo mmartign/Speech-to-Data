@@ -188,6 +188,10 @@ private:
     std::atomic<int>      energyThreshold{1000};
     std::atomic<int64_t>  energyThresholdSquared{1000LL * 1000LL};
 
+    // Remember the initial calibrated/user threshold as a hard upper bound for adaptive updates
+    std::atomic<int>  base_energy_threshold_{1000};
+    std::atomic<bool> base_threshold_initialized_{false};
+
     int sampleRate_ = Constants::SAMPLE_RATE;
     double recordTimeout_ = 2.0;
     double phraseTimeout_ = 3.0;
@@ -330,11 +334,19 @@ private:
         silence_rms_ema_.store(updated, std::memory_order_release);
 
         double desired = updated * Constants::ENERGY_THRESHOLD_MULTIPLIER;
+
         if (desired < static_cast<double>(Constants::ADAPTIVE_THRESHOLD_MIN)) {
             desired = static_cast<double>(Constants::ADAPTIVE_THRESHOLD_MIN);
         }
 
         int current = getEnergyThreshold();
+        int base    = base_energy_threshold_.load(std::memory_order_relaxed);
+
+        // Never allow adaptive threshold to exceed the initial calibrated/user value
+        if (desired > static_cast<double>(base)) {
+            desired = static_cast<double>(base);
+        }
+
         int target = static_cast<int>(desired);
 
         int max_step = std::max(5, static_cast<int>(current * Constants::ADAPTIVE_THRESHOLD_STEP_FRACTION));
@@ -562,6 +574,15 @@ public:
     }
 
     void setEnergyThreshold(int threshold) override {
+        // The very first call to setEnergyThreshold (from user or calibration)
+        // becomes our "base" threshold. Adaptive logic will never exceed this.
+        bool expected = false;
+        if (base_threshold_initialized_.compare_exchange_strong(expected, true,
+                                                                std::memory_order_acq_rel,
+                                                                std::memory_order_acquire)) {
+            base_energy_threshold_.store(threshold, std::memory_order_relaxed);
+        }
+
         energyThreshold.store(threshold, std::memory_order_relaxed);
         energyThresholdSquared.store(static_cast<int64_t>(threshold) * static_cast<int64_t>(threshold),
                                      std::memory_order_relaxed);
