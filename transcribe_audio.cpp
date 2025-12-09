@@ -922,6 +922,29 @@ void list_and_exit() {
     }
 }
 
+// Simple RMS-based silence detector on int16 chunks.
+// We compare the RMS against a fraction of the current energy threshold.
+bool is_silent_chunk(const std::vector<int16_t>& samples, int energy_threshold) {
+    if (samples.empty()) {
+        return true;
+    }
+
+    long double sum_squares = 0.0L;
+    for (int16_t s : samples) {
+        long double v = static_cast<long double>(s);
+        sum_squares += v * v;
+    }
+
+    long double rms = std::sqrt(sum_squares / static_cast<long double>(samples.size()));
+
+    // Energy threshold is an amplitude; here we treat as "no speech"
+    // anything well below it. The factor (e.g. 0.5L) is tunable.
+    const long double kFraction = 0.5L;
+    long double min_rms = static_cast<long double>(energy_threshold) * kFraction;
+
+    return rms < min_rms;
+}
+
 // =======================
 // Graceful shutdown handling
 // =======================
@@ -1064,6 +1087,15 @@ int main(int argc, char* argv[]) {
             }
 
             if (!audio_data.empty()) {
+                // Skip near-silent chunks to avoid Whisper hallucinating "Thank you" etc. ---
+                int current_energy_threshold = recorder->getEnergyThreshold();
+                if (is_silent_chunk(audio_data, current_energy_threshold)) {
+                    // Treat as no speech: do not update phrase timing and do not send to Whisper.
+                    // This prevents low-energy/no-speech buffers from producing fake text.
+                    // (phrase_complete logic above still works off the last real speech.)
+                    continue;
+            }
+
                 last_phrase_end_time = now;
                 phrase_time_set = true;
 
