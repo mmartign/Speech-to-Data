@@ -1,4 +1,6 @@
-all: analyze_text.exe  transcribe_audio.exe transcribe_audio_adaptive_energy.exe
+all: analyze_text.exe  transcribe_audio.exe
+clean:
+	rm -f *.exe *.o
 
 analyze_text.exe: analyze_text.cpp
 	g++ -std=c++20 -I ../openai-cpp/include/openai -o analyze_text.exe analyze_text.cpp -lcurl

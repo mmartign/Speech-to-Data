@@ -47,9 +47,11 @@ std::string TEMP_PROMPT;
 std::string TRIGGER_START;
 std::string TRIGGER_STOP;
 std::string TRIGGER_TEMP_CHECK;
+std::string TTS_COMMAND;
 
 std::mutex analysis_mutex;
 std::atomic<int> counter_value{0};
+std::atomic<int> temp_counter_value{0};
 std::atomic<int> active_analyses{0};
 std::mutex tts_mutex;
 std::once_flag openai_init_flag;
@@ -98,7 +100,7 @@ void speak_text(const std::string& text) {
     trimmed = "Announciator: " + trimmed;
 
     const std::string escaped = escape_for_quotes(trimmed);
-    const std::string cmd = "say \"" + escaped + "\" >/dev/null 2>&1 &";
+    const std::string cmd = TTS_COMMAND + " \"" + escaped + "\" >/dev/null 2>&1 &";
 
     std::lock_guard<std::mutex> lock(tts_mutex);
     std::system(cmd.c_str());
@@ -179,6 +181,7 @@ bool load_config(const std::string& path) {
     require_value("triggers.start", TRIGGER_START);
     require_value("triggers.stop", TRIGGER_STOP);
     require_value("triggers.temp_check", TRIGGER_TEMP_CHECK);
+    require_value("tts.command", TTS_COMMAND);
 
     auto kb_it = config.find("analysis.knowledge_base_ids");
     KNOWLEDGE_BASE_IDS = (kb_it != config.end()) ? kb_it->second : std::string{};
@@ -254,6 +257,7 @@ std::string extract_message_content(const json& response) {
 void analyze_text(const std::string& text) {
     AnalysisSession session(analysis_mutex, active_analyses);
     const int analysis_id = ++counter_value;
+    temp_counter_value = 0; // Reset temp counter for each main analysis
     say_info("Analysis of Recording[" + std::to_string(analysis_id) + "] Started ------------------->>>\n");
 
     const std::string filename = "results_analysis" + std::to_string(analysis_id) + ".txt";
@@ -346,14 +350,15 @@ void analyze_text(const std::string& text) {
 
 void temp_analyze_text(const std::string& text) {
     AnalysisSession session(analysis_mutex, active_analyses);
-    const int analysis_id = ++counter_value;
-    say_info("Temporary_Analysis of Recording[" + std::to_string(analysis_id) + "] Started ------------------->>>\n");
+    const int analysis_id = ++temp_counter_value;
+    const std::string analysis_id_str = std::to_string(counter_value + 1) + "." + std::to_string(analysis_id); 
+    say_info("Temporary_Analysis of Recording[" + analysis_id_str + "] Started ------------------->>>\n");
 
-    const std::string filename = "tmp_results_analysis" + std::to_string(analysis_id) + ".txt";
+    const std::string filename = "tmp_results_analysis" + analysis_id_str + ".txt";
     std::ofstream file(filename);
     if (!file.is_open()) {
         say_error("[ERROR] Unable to open results file: " + filename + "\n");
-        say_info("Temporary Analysis of Recording[" + std::to_string(analysis_id) + "] Finished ------------------->>>\n");
+        say_info("Temporary Analysis of Recording[" + analysis_id_str + "] Finished ------------------->>>\n");
         return;
     }
 
@@ -391,22 +396,22 @@ void temp_analyze_text(const std::string& text) {
         if (response_string.empty()) {
             file << "\n[WARN] No textual content found in temporary response. Full payload:\n"
                  << chat.dump(2) << "\n";
-            say_error(std::string{"[WARN] Analysis["} + std::to_string(analysis_id) +
+            say_error(std::string{"[WARN] Analysis["} + analysis_id_str +
                       "] returned no text content; see results file.\n");
         }
 
         file << "\n\nTemporary response received:\n" << response_string << "\n";
-        speak_text("Temporary Analysis[" + std::to_string(analysis_id) + "] completed. Response: " + response_string);
+        speak_text("Temporary Analysis[" + analysis_id_str + "] completed. Response: " + response_string);
     } catch (const std::exception& e) {
-        file << "\n[ERROR] Analysis[" << analysis_id << "] failed: " << e.what() << "\n";
-        say_error(std::string{"[ERROR] Analysis["} + std::to_string(analysis_id) + "] failed: " + e.what() + "\n");
+        file << "\n[ERROR] Analysis[" << analysis_id_str << "] failed: " << e.what() << "\n";
+        say_error(std::string{"[ERROR] Analysis["} + analysis_id_str + "] failed: " + e.what() + "\n");
     }
 
     if (!file) {
-        say_error("[ERROR] Writing to results file failed for Analysis[" + std::to_string(analysis_id) + "]\n");
+        say_error("[ERROR] Writing to results file failed for Analysis[" + analysis_id_str + "]\n");
     }
 
-    say_info("Temporary Analysis of Recording[" + std::to_string(analysis_id) + "] Finished ------------------->>>\n");
+    say_info("Temporary Analysis of Recording[" + analysis_id_str + "] Finished ------------------->>>\n");
 }
 
 // Main loop
