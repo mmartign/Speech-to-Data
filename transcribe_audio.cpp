@@ -133,6 +133,9 @@ namespace Constants {
     constexpr double ADAPTIVE_ONSET_TRIGGER_RATIO = 0.85;
     constexpr double VAD_PRE_ROLL_SECONDS = 0.30;
     constexpr int WHISPER_MAX_THREADS = 4;
+    constexpr int WHISPER_MAX_OUTPUT_TOKENS = 192;
+    constexpr double WHISPER_OUTPUT_TOKENS_PER_SECOND = 12.0;
+    constexpr int WHISPER_OUTPUT_TOKEN_MARGIN = 32;
     constexpr int MAIN_LOOP_TIMEOUT_MS = 250;
     constexpr double PHRASE_TIMEOUT_MULTIPLIER = 1.5;
     constexpr size_t MAX_QUEUED_AUDIO_CHUNKS = 64;
@@ -188,6 +191,142 @@ static std::string normalize_whisper_language(const std::string& raw) {
 static std::string transcription_context_for_language(const std::string& language) {
     (void)language;
     return {};
+}
+
+struct TranscriptWordSpan {
+    size_t begin = 0;
+    size_t end = 0;
+    std::string normalized;
+};
+
+static bool transcript_word_byte(unsigned char c) {
+    // Treat non-ASCII bytes as word bytes so UTF-8 words such as "c'e" or
+    // "autorizzazioni" with accents stay in one comparable token.
+    return std::isalnum(c) || c >= 0x80 || c == '\'';
+}
+
+static std::string normalize_transcript_word(const std::string& word) {
+    size_t begin = 0;
+    size_t end = word.size();
+    while (begin < end && word[begin] == '\'') {
+        ++begin;
+    }
+    while (end > begin && word[end - 1] == '\'') {
+        --end;
+    }
+
+    std::string normalized;
+    normalized.reserve(end - begin);
+    for (size_t i = begin; i < end; ++i) {
+        const unsigned char c = static_cast<unsigned char>(word[i]);
+        normalized.push_back(c < 0x80
+                                 ? static_cast<char>(std::tolower(c))
+                                 : static_cast<char>(c));
+    }
+    return normalized;
+}
+
+static std::vector<TranscriptWordSpan> extract_transcript_words(const std::string& text) {
+    std::vector<TranscriptWordSpan> words;
+    size_t i = 0;
+    while (i < text.size()) {
+        while (i < text.size() &&
+               !transcript_word_byte(static_cast<unsigned char>(text[i]))) {
+            ++i;
+        }
+        const size_t begin = i;
+        while (i < text.size() &&
+               transcript_word_byte(static_cast<unsigned char>(text[i]))) {
+            ++i;
+        }
+        if (begin == i) {
+            continue;
+        }
+
+        std::string normalized = normalize_transcript_word(text.substr(begin, i - begin));
+        if (!normalized.empty()) {
+            words.push_back(TranscriptWordSpan{begin, i, std::move(normalized)});
+        }
+    }
+    return words;
+}
+
+static std::string trim_ascii_edges_copy(const std::string& text) {
+    const auto not_space = [](unsigned char c) { return !std::isspace(c); };
+    const auto first = std::find_if(text.begin(), text.end(), not_space);
+    if (first == text.end()) {
+        return {};
+    }
+    const auto last = std::find_if(text.rbegin(), text.rend(), not_space).base();
+    return std::string(first, last);
+}
+
+static bool repeated_word_sequence_equal(const std::vector<TranscriptWordSpan>& words,
+                                         size_t lhs,
+                                         size_t rhs,
+                                         size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        if (words[lhs + i].normalized != words[rhs + i].normalized) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static std::optional<size_t> find_repetitive_tail_trim_offset(
+    const std::vector<TranscriptWordSpan>& words) {
+    if (words.size() < 8) {
+        return std::nullopt;
+    }
+
+    constexpr size_t kAllowedConsecutiveWordRepeats = 3;
+    constexpr size_t kMinConsecutiveWordRepeatsAtTail = 8;
+    constexpr size_t kMinConsecutiveWordRepeatsAnywhere = 16;
+    for (size_t i = 0; i < words.size();) {
+        size_t j = i + 1;
+        while (j < words.size() && words[j].normalized == words[i].normalized) {
+            ++j;
+        }
+
+        const size_t run_length = j - i;
+        const bool reaches_tail = j == words.size();
+        if (run_length >= kMinConsecutiveWordRepeatsAnywhere ||
+            (reaches_tail && run_length >= kMinConsecutiveWordRepeatsAtTail)) {
+            return words[i + kAllowedConsecutiveWordRepeats].begin;
+        }
+        i = j;
+    }
+
+    constexpr size_t kAllowedPhraseRepeats = 2;
+    constexpr size_t kMinPhraseRepeatsAtTail = 4;
+    constexpr size_t kMaxPhraseWords = 5;
+    for (size_t phrase_words = 2; phrase_words <= kMaxPhraseWords; ++phrase_words) {
+        for (size_t i = 0; i + phrase_words * kMinPhraseRepeatsAtTail <= words.size(); ++i) {
+            size_t repeats = 1;
+            while (i + (repeats + 1) * phrase_words <= words.size() &&
+                   repeated_word_sequence_equal(words,
+                                                i,
+                                                i + repeats * phrase_words,
+                                                phrase_words)) {
+                ++repeats;
+            }
+            if (repeats >= kMinPhraseRepeatsAtTail &&
+                i + repeats * phrase_words == words.size()) {
+                return words[i + phrase_words * kAllowedPhraseRepeats].begin;
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+static std::string trim_excessive_repetition(const std::string& text) {
+    const auto words = extract_transcript_words(text);
+    const auto trim_offset = find_repetitive_tail_trim_offset(words);
+    if (!trim_offset.has_value()) {
+        return text;
+    }
+    return trim_ascii_edges_copy(text.substr(0, *trim_offset));
 }
 
 class PortAudioRuntime {
@@ -1247,7 +1386,8 @@ public:
 
     std::string transcribe(const std::vector<float>& audio,
                            const std::string& language,
-                           bool translate = false) {
+                           bool translate = false,
+                           bool use_past_context = false) {
         if (ctx_ == nullptr || audio.empty()) {
             return {};
         }
@@ -1292,14 +1432,20 @@ public:
         params.detect_language = auto_language;
         params.translate = translate;
 
-        // Keep text context enabled. For file mode this is important because the
-        // file is processed as consecutive record_timeout-sized chunks; disabling
-        // context makes every chunk look like an isolated utterance and increases
-        // hallucinations. Live mode still has VAD phrase boundaries and the
-        // secondary silence gate to reduce cross-phrase contamination.
-        params.no_context = false;
+        // Live streams should not carry previous decoded text into the next chunk:
+        // a single hallucinated tail can otherwise poison later decodes. File mode
+        // opts in because deterministic adjacent chunks benefit from continuity.
+        params.no_context = !use_past_context;
+        params.n_max_text_ctx = use_past_context ? 96 : 0;
         params.no_timestamps = true;
         params.single_segment = true;
+        const double audio_seconds =
+            static_cast<double>(input->size()) / static_cast<double>(Constants::SAMPLE_RATE);
+        params.max_tokens = std::clamp(
+            static_cast<int>(std::ceil(audio_seconds * Constants::WHISPER_OUTPUT_TOKENS_PER_SECOND)) +
+                Constants::WHISPER_OUTPUT_TOKEN_MARGIN,
+            48,
+            Constants::WHISPER_MAX_OUTPUT_TOKENS);
 
         // Own printing in this program rather than letting whisper.cpp print
         // progress or partial text from inside the library.
@@ -1311,7 +1457,9 @@ public:
         params.suppress_blank = true;
         params.suppress_nst = true;
         params.temperature = 0.0f;
-        params.temperature_inc = 0.0f;
+        // Keep the first pass greedy, but allow whisper.cpp's built-in fallback
+        // when a decode is flagged as low quality or stuck in a repetition loop.
+        params.temperature_inc = 0.2f;
 
         // Do not set an initial prompt by default. The language/task tokens are
         // the authoritative interface. A prompt can be useful for domain terms,
@@ -1342,7 +1490,9 @@ public:
                           << " translate=" << (params.translate ? 1 : 0)
                           << " no_timestamps=" << (params.no_timestamps ? 1 : 0)
                           << " no_context=" << (params.no_context ? 1 : 0)
+                          << " n_max_text_ctx=" << params.n_max_text_ctx
                           << " single_segment=" << (params.single_segment ? 1 : 0)
+                          << " max_tokens=" << params.max_tokens
                           << " temperature_inc=" << params.temperature_inc
                           << " prompt=" << (params.initial_prompt ? 1 : 0)
                           << " multilingual_model=" << (is_multilingual_ ? 1 : 0)
@@ -1401,7 +1551,13 @@ public:
                 out += text;
             }
         }
-        return out;
+        std::string sanitized = trim_excessive_repetition(out);
+        if (verbose_ && sanitized.size() != out.size()) {
+            std::cerr << "[Whisper result] trimmed repetitive tail from "
+                      << out.size() << " to " << sanitized.size()
+                      << " bytes" << std::endl;
+        }
+        return sanitized;
     }
 
     void set_verbose(bool v) { verbose_ = v; }
@@ -1420,8 +1576,14 @@ class AudioTranscriber {
 public:
     // A single Whisper worker preserves order and avoids concurrent use of the
     // same whisper_context, which whisper.cpp documents as not thread-safe.
-    AudioTranscriber(WhisperModel& model, std::string language, bool translate)
-        : model_(model), default_language_(std::move(language)), default_translate_(translate) {
+    AudioTranscriber(WhisperModel& model,
+                     std::string language,
+                     bool translate,
+                     bool use_past_context = false)
+        : model_(model),
+          default_language_(std::move(language)),
+          default_translate_(translate),
+          use_past_context_(use_past_context) {
         running_.store(true, std::memory_order_release);
         worker_ = std::thread(&AudioTranscriber::worker_loop, this);
     }
@@ -1490,7 +1652,10 @@ private:
                     const std::string& language =
                         task.language.empty() ? default_language_ : task.language;
                     const bool translate = task.translate.value_or(default_translate_);
-                    task.promise.set_value(model_.transcribe(task.audio, language, translate));
+                    task.promise.set_value(model_.transcribe(task.audio,
+                                                             language,
+                                                             translate,
+                                                             use_past_context_));
                 }
             } catch (...) {
                 task.promise.set_exception(std::current_exception());
@@ -1501,6 +1666,7 @@ private:
     WhisperModel& model_;
     std::string default_language_;
     bool default_translate_ = false;
+    bool use_past_context_ = false;
     std::thread worker_;
     std::queue<Task> transcription_queue_;
     std::mutex queue_mutex_;
@@ -3030,8 +3196,13 @@ bool is_whisper_noise_token(const std::string& text) {
         "the door",
         "subscribe",
         "subtitles by",
+        "subtitles by the amara.org community",
         "subtitled by",
         "transcribed by",
+        "sottotitoli creati dalla comunit\xc3\xa0 amara.org",
+        "sottotitoli creati dalla comunit\xc3\xa0 amara org",
+        "sottotitoli creati dalla comunita amara.org",
+        "sottotitoli creati dalla comunita amara org",
         "www",
     };
     for (const auto& phrase : kHallucinationPhrases) {
@@ -3198,7 +3369,7 @@ int main(int argc, char* argv[]) {
                 const auto end_offset = std::chrono::duration_cast<std::chrono::system_clock::duration>(
                     std::chrono::duration<double>(end_sec));
                 const auto end_time = transcript_start + end_offset;
-                std::string text = trim(audio_model.transcribe(chunk, args.language, args.translate));
+                std::string text = trim(audio_model.transcribe(chunk, args.language, args.translate, true));
                 if (!text.empty()) {
                     const std::string timestamp_text = args.has_predefined_start_time
                         ? format_datetime_no_conversion(end_time)
