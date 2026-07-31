@@ -47,9 +47,12 @@ std::string MODEL_NAME;
 std::string KNOWLEDGE_BASE_IDS;
 std::string PROMPT;
 std::string TEMP_PROMPT;
+std::string HELP_PROMPT;
 std::string TRIGGER_START;
 std::string TRIGGER_STOP;
 std::string TRIGGER_TEMP_CHECK;
+std::string TRIGGER_HELP;
+std::string TRIGGER_DISCARD;
 std::string TTS_COMMAND;
 bool MAPPER_NETWORK_ENABLED = true;
 std::string MAPPER_CACHE_DIR = "./terminology_cache";
@@ -61,6 +64,7 @@ std::string MAPPER_TIMEOUT_SECONDS = "10";
 std::mutex analysis_mutex;
 std::atomic<int> counter_value{0};
 std::atomic<int> temp_counter_value{0};
+std::atomic<int> help_counter_value{0};
 std::atomic<int> active_analyses{0};
 std::mutex tts_mutex;
 std::once_flag openai_init_flag;
@@ -104,6 +108,10 @@ enum MsgKey {
     MSG_ANALYSIS_FEEDBACK_PREFIX,
     MSG_ANALYSIS_SUMMARY_FEEDBACK_MIDDLE,
     MSG_TEMP_CHECK_REQUESTED,
+    MSG_HELP_ANALYSIS_STARTED_PREFIX,
+    MSG_HELP_ANALYSIS_FINISHED_PREFIX,
+    MSG_HELP_REQUESTED,
+    MSG_RECORDING_DISCARDED,
     MSG_COUNT
 };
 
@@ -231,6 +239,22 @@ static const char* MESSAGES[MSG_COUNT][3] = {
     {"Temporary check requested ------------------->>>\n",
      "Controllo temporaneo richiesto ------------------->>>\n",
      "Vérification temporaire demandée ------------------->>>\n"},
+    /* MSG_HELP_ANALYSIS_STARTED_PREFIX */
+    {"Help_Analysis of Recording[",
+     "Analisi_di_Aiuto della Registrazione[",
+     "Analyse_d'Aide de l'Enregistrement["},
+    /* MSG_HELP_ANALYSIS_FINISHED_PREFIX */
+    {"Help Analysis of Recording[",
+     "Analisi di Aiuto della Registrazione[",
+     "Analyse d'Aide de l'Enregistrement["},
+    /* MSG_HELP_REQUESTED */
+    {"Help requested ------------------->>>\n",
+     "Aiuto richiesto ------------------->>>\n",
+     "Aide demandée ------------------->>>\n"},
+    /* MSG_RECORDING_DISCARDED */
+    {"Recording discarded ------------------->>>\n",
+     "Registrazione scartata ------------------->>>\n",
+     "Enregistrement annulé ------------------->>>\n"},
 };
 
 static const char* tr(MsgKey key) {
@@ -755,9 +779,12 @@ bool load_config(const std::string& path) {
     require_value("openai.model_name", MODEL_NAME);
     require_value("prompts.prompt", PROMPT);
     require_value("prompts.temp_prompt", TEMP_PROMPT);
+    require_value("prompts.help_prompt", HELP_PROMPT);
     require_value("triggers.start", TRIGGER_START);
     require_value("triggers.stop", TRIGGER_STOP);
     require_value("triggers.temp_check", TRIGGER_TEMP_CHECK);
+    require_value("triggers.help", TRIGGER_HELP);
+    require_value("triggers.discard", TRIGGER_DISCARD);
     require_value("tts.command", TTS_COMMAND);
 
     auto kb_it = config.find("analysis.knowledge_base_ids");
@@ -810,6 +837,8 @@ bool load_config(const std::string& path) {
     std::transform(TRIGGER_START.begin(), TRIGGER_START.end(), TRIGGER_START.begin(), ::tolower);
     std::transform(TRIGGER_STOP.begin(), TRIGGER_STOP.end(), TRIGGER_STOP.begin(), ::tolower);
     std::transform(TRIGGER_TEMP_CHECK.begin(), TRIGGER_TEMP_CHECK.end(), TRIGGER_TEMP_CHECK.begin(), ::tolower);
+    std::transform(TRIGGER_HELP.begin(), TRIGGER_HELP.end(), TRIGGER_HELP.begin(), ::tolower);
+    std::transform(TRIGGER_DISCARD.begin(), TRIGGER_DISCARD.end(), TRIGGER_DISCARD.begin(), ::tolower);
     OPENWEBUI_URL = ensure_trailing_slash(OPENWEBUI_URL);
 
     if (KNOWLEDGE_BASE_IDS.empty()) {
@@ -956,6 +985,7 @@ void analyze_text(const std::string& text) {
     AnalysisSession session(analysis_mutex);
     const int analysis_id = ++counter_value;
     temp_counter_value = 0; // Reset temp counter for each main analysis
+    help_counter_value = 0; // Reset help counter for each main analysis
     say_info(tr(MSG_ANALYSIS_STARTED_PREFIX) + std::to_string(analysis_id) + tr(MSG_ANALYSIS_STARTED_SUFFIX));
 
     const std::string filename = "results_analysis" + std::to_string(analysis_id) + ".txt";
@@ -1103,6 +1133,66 @@ void temp_analyze_text(const std::string& text) {
     say_info(tr(MSG_TEMP_ANALYSIS_FINISHED_PREFIX) + analysis_id_str + tr(MSG_ANALYSIS_FINISHED_SUFFIX));
 }
 
+void help_analyze_text(const std::string& text) {
+    AnalysisSession session(analysis_mutex);
+    const int analysis_id = ++help_counter_value;
+    // Use compound id (<main>.<help>) so help files sort with their parent analysis.
+    const std::string analysis_id_str = std::to_string(counter_value + 1) + "." + std::to_string(analysis_id);
+    say_info(tr(MSG_HELP_ANALYSIS_STARTED_PREFIX) + analysis_id_str + tr(MSG_ANALYSIS_STARTED_SUFFIX));
+
+    const std::string filename = "tmp_help_analysis" + analysis_id_str + ".txt";
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        say_error(tr(MSG_ERR_OPEN_RESULTS) + filename + "\n");
+        say_info(tr(MSG_HELP_ANALYSIS_FINISHED_PREFIX) + analysis_id_str + tr(MSG_ANALYSIS_FINISHED_SUFFIX));
+        return;
+    }
+
+    file << "Using model: " << MODEL_NAME << "\n";
+    file << "Endpoint: " << OPENWEBUI_URL << "\n";
+    file << "Prompt: " << HELP_PROMPT << "\n" << text << "\n";
+
+    if (!file) {
+        say_error(tr(MSG_ERR_WRITE_HEADER) + filename + "\n");
+    }
+
+    std::string response_string;
+
+    try {
+        initialize_openai_client();
+
+        json body = build_chat_body(HELP_PROMPT + "\n" + text, true);
+        auto chat = openai::chat().create(body);
+        const std::string api_error = extract_api_error(chat);
+        if (!api_error.empty()) {
+            throw std::runtime_error("OpenWebUI API error: " + api_error);
+        }
+        response_string = strip_internal_reasoning_tags(extract_message_content(chat));
+        if (check_fhir) {
+            response_string = revise_fhir_bundle_in_response(response_string, "help_" + analysis_id_str, file);
+        }
+        if (response_string.empty()) {
+            file << "\n[WARN] No textual content found in help response. Full payload:\n"
+                 << chat.dump(2) << "\n";
+            say_error(std::string{tr(MSG_WARN_NO_TEXT_PREFIX)} + analysis_id_str +
+                      tr(MSG_WARN_NO_TEXT_SUFFIX));
+        }
+
+        file << "\n\nHelp response received:\n" << response_string << "\n";
+        speak_text("Help[" + analysis_id_str + "] completed. Suggestion: " + response_string);
+    } catch (const std::exception& e) {
+        file << "\n[ERROR] Analysis[" << analysis_id_str << "] failed: " << e.what() << "\n";
+        say_error(std::string{tr(MSG_ERR_ANALYSIS_FAILED_PREFIX)} + analysis_id_str +
+                  tr(MSG_ERR_ANALYSIS_FAILED_MIDDLE) + e.what() + "\n");
+    }
+
+    if (!file) {
+        say_error(tr(MSG_ERR_WRITE_RESULTS_PREFIX) + analysis_id_str + tr(MSG_ERR_WRITE_RESULTS_SUFFIX));
+    }
+
+    say_info(tr(MSG_HELP_ANALYSIS_FINISHED_PREFIX) + analysis_id_str + tr(MSG_ANALYSIS_FINISHED_SUFFIX));
+}
+
 using AnalysisFunction = void (*)(const std::string&);
 
 bool launch_analysis_thread(AnalysisFunction function, std::string text) {
@@ -1144,8 +1234,8 @@ static void print_help(const char* prog) {
         "  The program reads ./config.ini on startup. The following sections and\n"
         "  keys are required:\n"
         "    [openai]   base_url, api_key, model_name\n"
-        "    [prompts]  prompt, temp_prompt\n"
-        "    [triggers] start, stop, temp_check\n"
+        "    [prompts]  prompt, temp_prompt, help_prompt\n"
+        "    [triggers] start, stop, temp_check, help, discard\n"
         "    [tts]      command\n"
         "  Optional keys:\n"
         "    [analysis]             knowledge_base_ids\n"
@@ -1159,6 +1249,11 @@ static void print_help(const char* prog) {
         "             stop must be requested again after it finishes.\n"
         "  temp_check Perform a temporary analysis on a snapshot of collected text\n"
         "             without stopping the recording.\n"
+        "  help       Ask the AI for a suggestion on what to do next, based on a\n"
+        "             snapshot of the collected text so far, without stopping the\n"
+        "             recording.\n"
+        "  discard    Discard the currently collected text and stop recording,\n"
+        "             without sending anything to the AI.\n"
         "\n"
         "Exit status:\n"
         "  0  Normal exit (EOF on stdin).\n"
@@ -1216,6 +1311,8 @@ int main(int argc, char* argv[]) {
         const bool line_contains_start = contains_substring(lower_line, TRIGGER_START);
         const bool line_contains_stop = contains_substring(lower_line, TRIGGER_STOP);
         const bool line_contains_temp_check = contains_substring(lower_line, TRIGGER_TEMP_CHECK);
+        const bool line_contains_help = contains_substring(lower_line, TRIGGER_HELP);
+        const bool line_contains_discard = contains_substring(lower_line, TRIGGER_DISCARD);
 
         if (line_contains_start) {
             if (collect_text) {
@@ -1255,7 +1352,32 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (collect_text && !line_contains_start && !line_contains_stop && !line_contains_temp_check) {
+        if (line_contains_help) {
+            if (!collect_text) {
+                say_info(tr(MSG_NO_RECORDING_RUNNING));
+            } else {
+                say_info(tr(MSG_HELP_REQUESTED));
+                if (active_analyses.load() > 0) {
+                    say_info(tr(MSG_ANOTHER_ANALYSIS_RUNNING));
+                }
+                std::string snapshot = collected_text;
+                // Help analysis runs on a snapshot while recording continues.
+                launch_analysis_thread(help_analyze_text, std::move(snapshot));
+            }
+        }
+
+        if (line_contains_discard) {
+            if (!collect_text) {
+                say_info(tr(MSG_NO_RECORDING_RUNNING));
+            } else {
+                collected_text.clear();
+                collect_text = false;
+                say_info(tr(MSG_RECORDING_DISCARDED));
+            }
+        }
+
+        if (collect_text && !line_contains_start && !line_contains_stop && !line_contains_temp_check &&
+            !line_contains_help && !line_contains_discard) {
             collected_text += line + "\n";
         }
     }
