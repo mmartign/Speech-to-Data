@@ -77,7 +77,7 @@ endif()
 target_link_curl(analyze_text)
 
 # ===== transcribe_audio.exe =====
-add_executable(transcribe_audio transcribe_audio.cpp)
+add_executable(transcribe_audio transcribe_audio.cpp transcribe_audio_lib.cpp)
 
 # Cache variables let you adjust paths from cmake -D...=...
 set(PORTAUDIO_INCLUDE "/opt/local/include" CACHE PATH "PortAudio include dir")
@@ -162,8 +162,19 @@ if(BUILD_TESTING)
   set_target_properties(analyze_text_tests PROPERTIES
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+  # transcribe_audio_lib has no PortAudio/whisper.cpp/Boost dependency, so this
+  # test binary builds without any of transcribe_audio.exe's heavier setup.
+  add_executable(transcribe_audio_tests
+      transcribe_audio_lib.cpp
+      tests/test_transcribe_audio_lib.cpp
+  )
+  target_link_libraries(transcribe_audio_tests PRIVATE Catch2::Catch2WithMain)
+  set_target_properties(transcribe_audio_tests PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
   list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
   include(CTest)
   include(Catch)
   catch_discover_tests(analyze_text_tests)
+  catch_discover_tests(transcribe_audio_tests)
 endif()

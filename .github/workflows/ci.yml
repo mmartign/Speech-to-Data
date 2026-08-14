@@ -17,9 +17,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcurl4-openssl-dev nlohmann-json3-dev
 
-      # transcribe_audio.exe is not built here: it depends on whisper.cpp and
-      # PortAudio being available as sibling checkouts with macOS-oriented
-      # paths, which this runner does not provide. analyze_text.exe and
+      # transcribe_audio.exe itself is not built here: it depends on whisper.cpp
+      # and PortAudio being available as sibling checkouts with macOS-oriented
+      # paths, which this runner does not provide. Its pure logic, however,
+      # lives in transcribe_audio_lib.{h,cpp} with no such dependency, so
+      # transcribe_audio_tests builds and runs fine. analyze_text.exe and
       # deterministic_fhir_mapper.exe resolve their dependencies portably
       # (openai-cpp is fetched automatically if no sibling checkout exists;
       # curl/nlohmann_json come from the packages installed above).
@@ -27,7 +29,7 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build analyze_text, deterministic_fhir_mapper, and tests
-        run: cmake --build build --target analyze_text deterministic_fhir_mapper analyze_text_tests -j
+        run: cmake --build build --target analyze_text deterministic_fhir_mapper analyze_text_tests transcribe_audio_tests -j
 
       - name: Run unit tests
         run: ctest --test-dir build --output-on-failure
