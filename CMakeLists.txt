@@ -17,12 +17,28 @@ if(EXISTS "${CURL_ROOT}")
   list(PREPEND CMAKE_PREFIX_PATH "${CURL_ROOT}")
 endif()
 
-# ===== analyze_text.exe =====
-add_executable(analyze_text analyze_text.cpp)
+# openai-cpp is normally checked out as a sibling directory (matching the
+# original Makefile's -I ../openai-cpp/include/openai). If it isn't present
+# (e.g. a clean CI checkout), fetch it so the build doesn't depend on manual
+# sibling-repo setup.
+set(OPENAI_CPP_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../openai-cpp/include/openai" CACHE PATH "openai-cpp include dir")
+if(NOT EXISTS "${OPENAI_CPP_INCLUDE_DIR}/openai.hpp")
+  message(STATUS "Sibling openai-cpp checkout not found at ${OPENAI_CPP_INCLUDE_DIR}; fetching olrea/openai-cpp")
+  include(FetchContent)
+  FetchContent_Declare(
+    openai_cpp
+    GIT_REPOSITORY https://github.com/olrea/openai-cpp.git
+    GIT_TAG main
+  )
+  FetchContent_Populate(openai_cpp)
+  set(OPENAI_CPP_INCLUDE_DIR "${openai_cpp_SOURCE_DIR}/include/openai")
+endif()
 
-# Include path from your Makefile: -I ../openai-cpp/include/openai
+# ===== analyze_text.exe =====
+add_executable(analyze_text analyze_text.cpp analyze_text_lib.cpp)
+
 target_include_directories(analyze_text PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../openai-cpp/include/openai
+    "${OPENAI_CPP_INCLUDE_DIR}"
 )
 
 # Link against libcurl (prefer config if available, fallback to -lcurl)
@@ -123,3 +139,31 @@ target_link_curl(deterministic_fhir_mapper)
 target_link_nlohmann_json(deterministic_fhir_mapper)
 set_target_properties(deterministic_fhir_mapper PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# ===== Unit tests =====
+option(BUILD_TESTING "Build unit tests" ON)
+if(BUILD_TESTING)
+  include(FetchContent)
+  FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v3.7.1
+  )
+  FetchContent_MakeAvailable(Catch2)
+
+  add_executable(analyze_text_tests
+      analyze_text_lib.cpp
+      tests/test_analyze_text_lib.cpp
+  )
+  target_include_directories(analyze_text_tests PRIVATE
+      "${OPENAI_CPP_INCLUDE_DIR}"
+  )
+  target_link_libraries(analyze_text_tests PRIVATE Catch2::Catch2WithMain)
+  set_target_properties(analyze_text_tests PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+  list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
+  include(CTest)
+  include(Catch)
+  catch_discover_tests(analyze_text_tests)
+endif()

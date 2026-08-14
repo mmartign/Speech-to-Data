@@ -174,9 +174,16 @@ Reads a continuous transcript stream from stdin, monitors configurable voice tri
 | `openai` | `model_name` | Model identifier (e.g., `medgemma-1.5:4b`) |
 | `prompts` | `prompt` | System prompt for full analysis |
 | `prompts` | `temp_prompt` | System prompt for mid-session temporary checks |
+| `prompts` | `help_prompt` | System prompt for "what should I do next" guidance requests |
 | `triggers` | `start` | Voice phrase that begins recording (case-insensitive) |
-| `triggers` | `stop` | Voice phrase that ends recording and triggers analysis |
-| `triggers` | `temp_check` | Voice phrase that triggers an interim analysis snapshot |
+| `triggers` | `stop` | Voice phrase that ends recording and triggers full analysis |
+| `triggers` | `temp_check` | Voice phrase that triggers an interim analysis snapshot without stopping |
+| `triggers` | `help` | Voice phrase requesting AI guidance on what to do next, based on a snapshot of the recording so far |
+| `triggers` | `discard` | Voice phrase that discards the current recording and stops, without any AI call |
+| `triggers` | `repeat` | Voice phrase that replays the last spoken feedback (summary, temp-check response, or help suggestion) |
+| `triggers` | `status` | Voice phrase that reports whether recording is on, off, or paused, and how many analyses are running |
+| `triggers` | `pause` | Voice phrase that temporarily stops collecting speech, without discarding what's been collected |
+| `triggers` | `resume` | Voice phrase that resumes collecting speech after a pause |
 | `tts` | `command` | Shell command used for spoken output (e.g., `espeak`) |
 
 Optional keys:
@@ -193,13 +200,19 @@ Optional keys:
 **Workflow:**
 
 1. Reads transcript lines from stdin (piped from `transcribe_audio.exe`).
-2. Detects trigger phrases to start/stop recording or request a temporary analysis snapshot.
+2. Detects trigger phrases to control the recording session:
+   - `start` / `stop` — begin collecting speech / stop and submit for full analysis.
+   - `temp_check` / `help` — snapshot the text collected so far for an interim analysis, or an AI suggestion on what to do next, without stopping recording.
+   - `pause` / `resume` — temporarily stop or resume appending speech to the collected text, without discarding it.
+   - `discard` — clear the current recording and stop, without any AI call.
+   - `repeat` — replay the last spoken feedback (summary, temp-check response, or help suggestion).
+   - `status` — report whether recording is on, off, or paused, and how many analyses are currently running.
 3. On stop, submits collected text to the LLM using the configured prompt and optionally augments with knowledge base content.
 4. Strips internal model reasoning tags (`<unused…>`) from the response before output.
 5. Detects any FHIR Bundle in the LLM response and automatically invokes `deterministic_fhir_mapper.exe` to normalize it.
 6. Generates a concise 3-sentence spoken summary via a second LLM call, then vocalizes it using the configured TTS command.
 7. Writes full results (model used, endpoint, prompt, raw response, summary) to a timestamped file (`results_analysis<N>.txt`).
-8. Temporary analysis snapshots are saved to `tmp_results_analysis<N>.<M>.txt` and spoken aloud without stopping the active recording session.
+8. Temporary-check and help-guidance snapshots are saved to `tmp_results_analysis<N>.<M>.txt` and `tmp_help_analysis<N>.<M>.txt` respectively, and spoken aloud without stopping the active recording session.
 
 ---
 
