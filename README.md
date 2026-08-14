@@ -3,6 +3,9 @@
 🚀 **Real-Time Medical Speech-to-Knowledge Pipeline**
 
 [![CI](https://github.com/mmartign/Speech-to-Knowledge/actions/workflows/ci.yml/badge.svg)](https://github.com/mmartign/Speech-to-Knowledge/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
+[![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
 <img width="736" height="351" alt="Speech-to-Knowledge-Architecture drawio" src="https://github.com/user-attachments/assets/3f658388-d68f-479d-ba20-e76149c4391c" />
 
