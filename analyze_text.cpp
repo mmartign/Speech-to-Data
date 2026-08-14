@@ -53,6 +53,10 @@ std::string TRIGGER_STOP;
 std::string TRIGGER_TEMP_CHECK;
 std::string TRIGGER_HELP;
 std::string TRIGGER_DISCARD;
+std::string TRIGGER_REPEAT;
+std::string TRIGGER_STATUS;
+std::string TRIGGER_PAUSE;
+std::string TRIGGER_RESUME;
 std::string TTS_COMMAND;
 bool MAPPER_NETWORK_ENABLED = true;
 std::string MAPPER_CACHE_DIR = "./terminology_cache";
@@ -67,6 +71,8 @@ std::atomic<int> temp_counter_value{0};
 std::atomic<int> help_counter_value{0};
 std::atomic<int> active_analyses{0};
 std::mutex tts_mutex;
+std::mutex feedback_mutex;
+std::string last_feedback_message;
 std::once_flag openai_init_flag;
 bool check_fhir = false;
 bool no_analysis_summary = false;
@@ -112,8 +118,20 @@ enum MsgKey {
     MSG_HELP_ANALYSIS_FINISHED_PREFIX,
     MSG_HELP_REQUESTED,
     MSG_RECORDING_DISCARDED,
+    MSG_NOTHING_TO_REPEAT,
+    MSG_STATUS_HEADER,
+    MSG_STATUS_STATE_IDLE,
+    MSG_STATUS_STATE_COLLECTING,
+    MSG_STATUS_STATE_PAUSED,
+    MSG_STATUS_ANALYSES_MIDDLE,
+    MSG_RECORDING_PAUSED,
+    MSG_RECORDING_ALREADY_PAUSED,
+    MSG_RECORDING_RESUMED,
+    MSG_RECORDING_NOT_PAUSED,
     MSG_COUNT
 };
+
+enum class RecordingState { Idle, Collecting, Paused };
 
 // Columns: EN=0, IT=1, FR=2
 static const char* MESSAGES[MSG_COUNT][3] = {
@@ -255,6 +273,40 @@ static const char* MESSAGES[MSG_COUNT][3] = {
     {"Recording discarded ------------------->>>\n",
      "Registrazione scartata ------------------->>>\n",
      "Enregistrement annulé ------------------->>>\n"},
+    /* MSG_NOTHING_TO_REPEAT */
+    {"Nothing to repeat yet ------------------->>>\n",
+     "Niente da ripetere ancora ------------------->>>\n",
+     "Rien à répéter pour le moment ------------------->>>\n"},
+    /* MSG_STATUS_HEADER */
+    {"Status: recording is ",
+     "Stato: la registrazione è ",
+     "État : l'enregistrement est "},
+    /* MSG_STATUS_STATE_IDLE */
+    {"off", "spenta", "arrêté"},
+    /* MSG_STATUS_STATE_COLLECTING */
+    {"on", "attiva", "en cours"},
+    /* MSG_STATUS_STATE_PAUSED */
+    {"paused", "in pausa", "en pause"},
+    /* MSG_STATUS_ANALYSES_MIDDLE */
+    {". Active analyses: ",
+     ". Analisi attive: ",
+     ". Analyses actives : "},
+    /* MSG_RECORDING_PAUSED */
+    {"Recording paused ------------------->>>\n",
+     "Registrazione in pausa ------------------->>>\n",
+     "Enregistrement mis en pause ------------------->>>\n"},
+    /* MSG_RECORDING_ALREADY_PAUSED */
+    {"Recording is already paused ------------------->>>\n",
+     "La registrazione è già in pausa ------------------->>>\n",
+     "L'enregistrement est déjà en pause ------------------->>>\n"},
+    /* MSG_RECORDING_RESUMED */
+    {"Recording resumed ------------------->>>\n",
+     "Registrazione ripresa ------------------->>>\n",
+     "Enregistrement repris ------------------->>>\n"},
+    /* MSG_RECORDING_NOT_PAUSED */
+    {"Recording is not paused ------------------->>>\n",
+     "La registrazione non è in pausa ------------------->>>\n",
+     "L'enregistrement n'est pas en pause ------------------->>>\n"},
 };
 
 static const char* tr(MsgKey key) {
@@ -707,6 +759,15 @@ void speak_text(const std::string& text) {
     std::system(cmd.c_str());
 }
 
+void speak_feedback(const std::string& text) {
+    // Remember substantive spoken feedback (summaries/suggestions) so it can be replayed on request.
+    {
+        std::lock_guard<std::mutex> lock(feedback_mutex);
+        last_feedback_message = text;
+    }
+    speak_text(text);
+}
+
 void say_info(const std::string& message) {
     std::cout << message;
     speak_text(message);
@@ -785,6 +846,10 @@ bool load_config(const std::string& path) {
     require_value("triggers.temp_check", TRIGGER_TEMP_CHECK);
     require_value("triggers.help", TRIGGER_HELP);
     require_value("triggers.discard", TRIGGER_DISCARD);
+    require_value("triggers.repeat", TRIGGER_REPEAT);
+    require_value("triggers.status", TRIGGER_STATUS);
+    require_value("triggers.pause", TRIGGER_PAUSE);
+    require_value("triggers.resume", TRIGGER_RESUME);
     require_value("tts.command", TTS_COMMAND);
 
     auto kb_it = config.find("analysis.knowledge_base_ids");
@@ -839,6 +904,10 @@ bool load_config(const std::string& path) {
     std::transform(TRIGGER_TEMP_CHECK.begin(), TRIGGER_TEMP_CHECK.end(), TRIGGER_TEMP_CHECK.begin(), ::tolower);
     std::transform(TRIGGER_HELP.begin(), TRIGGER_HELP.end(), TRIGGER_HELP.begin(), ::tolower);
     std::transform(TRIGGER_DISCARD.begin(), TRIGGER_DISCARD.end(), TRIGGER_DISCARD.begin(), ::tolower);
+    std::transform(TRIGGER_REPEAT.begin(), TRIGGER_REPEAT.end(), TRIGGER_REPEAT.begin(), ::tolower);
+    std::transform(TRIGGER_STATUS.begin(), TRIGGER_STATUS.end(), TRIGGER_STATUS.begin(), ::tolower);
+    std::transform(TRIGGER_PAUSE.begin(), TRIGGER_PAUSE.end(), TRIGGER_PAUSE.begin(), ::tolower);
+    std::transform(TRIGGER_RESUME.begin(), TRIGGER_RESUME.end(), TRIGGER_RESUME.begin(), ::tolower);
     OPENWEBUI_URL = ensure_trailing_slash(OPENWEBUI_URL);
 
     if (KNOWLEDGE_BASE_IDS.empty()) {
@@ -1057,8 +1126,8 @@ void analyze_text(const std::string& text) {
             }
 
             file << "\nShort summary of response:\n" << summary_string << "\n";
-            speak_text(std::string{tr(MSG_ANALYSIS_FEEDBACK_PREFIX)} + std::to_string(analysis_id) +
-                       tr(MSG_ANALYSIS_SUMMARY_FEEDBACK_MIDDLE) + summary_string);
+            speak_feedback(std::string{tr(MSG_ANALYSIS_FEEDBACK_PREFIX)} + std::to_string(analysis_id) +
+                           tr(MSG_ANALYSIS_SUMMARY_FEEDBACK_MIDDLE) + summary_string);
         } catch (const std::exception& e) {
             file << "\n[ERROR] Summary generation failed: " << e.what() << "\n";
             say_error(std::string{tr(MSG_ERR_SUMMARY_FAILED_PREFIX)} + std::to_string(analysis_id) +
@@ -1119,7 +1188,7 @@ void temp_analyze_text(const std::string& text) {
         }
 
         file << "\n\nTemporary response received:\n" << response_string << "\n";
-        speak_text("Temporary Analysis[" + analysis_id_str + "] completed. Response: " + response_string);
+        speak_feedback("Temporary Analysis[" + analysis_id_str + "] completed. Response: " + response_string);
     } catch (const std::exception& e) {
         file << "\n[ERROR] Analysis[" << analysis_id_str << "] failed: " << e.what() << "\n";
         say_error(std::string{tr(MSG_ERR_ANALYSIS_FAILED_PREFIX)} + analysis_id_str +
@@ -1179,7 +1248,7 @@ void help_analyze_text(const std::string& text) {
         }
 
         file << "\n\nHelp response received:\n" << response_string << "\n";
-        speak_text("Help[" + analysis_id_str + "] completed. Suggestion: " + response_string);
+        speak_feedback("Help[" + analysis_id_str + "] completed. Suggestion: " + response_string);
     } catch (const std::exception& e) {
         file << "\n[ERROR] Analysis[" << analysis_id_str << "] failed: " << e.what() << "\n";
         say_error(std::string{tr(MSG_ERR_ANALYSIS_FAILED_PREFIX)} + analysis_id_str +
@@ -1235,7 +1304,8 @@ static void print_help(const char* prog) {
         "  keys are required:\n"
         "    [openai]   base_url, api_key, model_name\n"
         "    [prompts]  prompt, temp_prompt, help_prompt\n"
-        "    [triggers] start, stop, temp_check, help, discard\n"
+        "    [triggers] start, stop, temp_check, help, discard, repeat, status,\n"
+        "               pause, resume\n"
         "    [tts]      command\n"
         "  Optional keys:\n"
         "    [analysis]             knowledge_base_ids\n"
@@ -1254,6 +1324,13 @@ static void print_help(const char* prog) {
         "             recording.\n"
         "  discard    Discard the currently collected text and stop recording,\n"
         "             without sending anything to the AI.\n"
+        "  pause      Temporarily stop appending speech to the collected text,\n"
+        "             without discarding what has been collected so far.\n"
+        "  resume     Resume appending speech after a pause.\n"
+        "  repeat     Speak the last substantive feedback again (analysis summary,\n"
+        "             temporary-check response, or help suggestion).\n"
+        "  status     Report whether recording is on, off, or paused, and how many\n"
+        "             analyses are currently running.\n"
         "\n"
         "Exit status:\n"
         "  0  Normal exit (EOF on stdin).\n"
@@ -1300,7 +1377,7 @@ int main(int argc, char* argv[]) {
 
     std::string line;
     std::string collected_text;
-    bool collect_text = false;
+    RecordingState recording_state = RecordingState::Idle;
 
     while (std::getline(std::cin, line)) {
         std::cout << line << std::endl;
@@ -1313,19 +1390,23 @@ int main(int argc, char* argv[]) {
         const bool line_contains_temp_check = contains_substring(lower_line, TRIGGER_TEMP_CHECK);
         const bool line_contains_help = contains_substring(lower_line, TRIGGER_HELP);
         const bool line_contains_discard = contains_substring(lower_line, TRIGGER_DISCARD);
+        const bool line_contains_repeat = contains_substring(lower_line, TRIGGER_REPEAT);
+        const bool line_contains_status = contains_substring(lower_line, TRIGGER_STATUS);
+        const bool line_contains_pause = contains_substring(lower_line, TRIGGER_PAUSE);
+        const bool line_contains_resume = contains_substring(lower_line, TRIGGER_RESUME);
 
         if (line_contains_start) {
-            if (collect_text) {
+            if (recording_state != RecordingState::Idle) {
                 say_info(tr(MSG_RECORDING_ALREADY_STARTED));
             } else {
                 say_info(tr(MSG_RECORDING_STARTED));
                 collected_text.clear();
-                collect_text = true;
+                recording_state = RecordingState::Collecting;
             }
         }
 
         if (line_contains_stop) {
-            if (!collect_text) {
+            if (recording_state == RecordingState::Idle) {
                 say_info(tr(MSG_NO_RECORDING_RUNNING));
             } else if (active_analyses.load() > 0) {
                 say_info(tr(MSG_ANALYSIS_RUNNING_STOP_BLOCKED));
@@ -1333,13 +1414,13 @@ int main(int argc, char* argv[]) {
                 say_info(tr(MSG_RECORDING_STOPPED));
                 std::string text_to_analyze = collected_text;
                 collected_text.clear();
-                collect_text = false;
+                recording_state = RecordingState::Idle;
                 launch_analysis_thread(analyze_text, std::move(text_to_analyze));
             }
         }
 
         if (line_contains_temp_check) {
-            if (!collect_text) {
+            if (recording_state == RecordingState::Idle) {
                 say_info(tr(MSG_NO_RECORDING_RUNNING));
             } else {
                 say_info(tr(MSG_TEMP_CHECK_REQUESTED));
@@ -1353,7 +1434,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (line_contains_help) {
-            if (!collect_text) {
+            if (recording_state == RecordingState::Idle) {
                 say_info(tr(MSG_NO_RECORDING_RUNNING));
             } else {
                 say_info(tr(MSG_HELP_REQUESTED));
@@ -1367,17 +1448,64 @@ int main(int argc, char* argv[]) {
         }
 
         if (line_contains_discard) {
-            if (!collect_text) {
+            if (recording_state == RecordingState::Idle) {
                 say_info(tr(MSG_NO_RECORDING_RUNNING));
             } else {
                 collected_text.clear();
-                collect_text = false;
+                recording_state = RecordingState::Idle;
                 say_info(tr(MSG_RECORDING_DISCARDED));
             }
         }
 
-        if (collect_text && !line_contains_start && !line_contains_stop && !line_contains_temp_check &&
-            !line_contains_help && !line_contains_discard) {
+        if (line_contains_pause) {
+            if (recording_state == RecordingState::Idle) {
+                say_info(tr(MSG_NO_RECORDING_RUNNING));
+            } else if (recording_state == RecordingState::Paused) {
+                say_info(tr(MSG_RECORDING_ALREADY_PAUSED));
+            } else {
+                recording_state = RecordingState::Paused;
+                say_info(tr(MSG_RECORDING_PAUSED));
+            }
+        }
+
+        if (line_contains_resume) {
+            if (recording_state == RecordingState::Idle) {
+                say_info(tr(MSG_NO_RECORDING_RUNNING));
+            } else if (recording_state == RecordingState::Collecting) {
+                say_info(tr(MSG_RECORDING_NOT_PAUSED));
+            } else {
+                recording_state = RecordingState::Collecting;
+                say_info(tr(MSG_RECORDING_RESUMED));
+            }
+        }
+
+        if (line_contains_repeat) {
+            std::string feedback_copy;
+            {
+                std::lock_guard<std::mutex> lock(feedback_mutex);
+                feedback_copy = last_feedback_message;
+            }
+            if (feedback_copy.empty()) {
+                say_info(tr(MSG_NOTHING_TO_REPEAT));
+            } else {
+                // Replay audio only, mirroring how the original feedback was delivered.
+                speak_text(feedback_copy);
+            }
+        }
+
+        if (line_contains_status) {
+            const char* state_str = (recording_state == RecordingState::Collecting) ? tr(MSG_STATUS_STATE_COLLECTING)
+                                   : (recording_state == RecordingState::Paused) ? tr(MSG_STATUS_STATE_PAUSED)
+                                   : tr(MSG_STATUS_STATE_IDLE);
+            std::ostringstream status_oss;
+            status_oss << tr(MSG_STATUS_HEADER) << state_str << tr(MSG_STATUS_ANALYSES_MIDDLE)
+                       << active_analyses.load() << ".\n";
+            say_info(status_oss.str());
+        }
+
+        if (recording_state == RecordingState::Collecting && !line_contains_start && !line_contains_stop &&
+            !line_contains_temp_check && !line_contains_help && !line_contains_discard &&
+            !line_contains_pause && !line_contains_resume && !line_contains_repeat && !line_contains_status) {
             collected_text += line + "\n";
         }
     }
