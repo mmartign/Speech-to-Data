@@ -202,6 +202,7 @@ Optional keys:
 | `deterministic_mapper` | `cache_ttl_days` | Cache TTL in days (default: `7`) |
 | `deterministic_mapper` | `loinc_user` / `loinc_pass` | LOINC FHIR credentials (optional, free registration) |
 | `deterministic_mapper` | `timeout_seconds` | HTTP timeout for terminology lookups (default: `10`) |
+| `tts` | `self_echo_grace_seconds` | Seconds to ignore transcript input after `list_commands` finishes speaking, to absorb ASR pipeline latency (default: `5`) |
 
 **Workflow:**
 

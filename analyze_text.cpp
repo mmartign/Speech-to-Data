@@ -62,6 +62,7 @@ std::string TRIGGER_PAUSE;
 std::string TRIGGER_RESUME;
 std::string TRIGGER_LIST_COMMANDS;
 std::string TTS_COMMAND;
+double SELF_ECHO_GRACE_SECONDS = 5.0;
 bool MAPPER_NETWORK_ENABLED = true;
 std::string MAPPER_CACHE_DIR = "./terminology_cache";
 std::string MAPPER_CACHE_TTL_DAYS = "7";
@@ -488,12 +489,14 @@ void speak_feedback(const std::string& text) {
 
 // After the mic could plausibly have heard the assistant speak (e.g. the
 // list_commands announcement, which recites every trigger phrase verbatim),
-// suppress trigger detection for a short grace period. This is on top of
-// blocking through the TTS call itself; the grace period absorbs the extra
-// latency of the transcribe_audio -> ASR pipeline still emitting a trailing
-// line for audio it captured just before playback ended.
-constexpr int64_t POST_SPEECH_GRACE_MS = 1000;
-
+// suppress trigger detection for a grace period. This is on top of blocking
+// through the TTS call itself; the grace period absorbs the extra latency of
+// the transcribe_audio -> ASR pipeline (a separate process that keeps
+// listening throughout, independent of our blocking) still emitting a
+// trailing transcript line for audio it captured just before playback ended.
+// Whisper-based transcription of a multi-second announcement can itself take
+// several seconds, so the default is deliberately generous; tune it via
+// tts.self_echo_grace_seconds in config.ini for the ASR model/hardware in use.
 void mute_self_echo_for(std::chrono::milliseconds duration) {
     const auto mute_until = std::chrono::steady_clock::now() + duration;
     const int64_t mute_until_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -594,6 +597,15 @@ bool load_config(const std::string& path) {
     auto mapper_timeout_it = config.find("deterministic_mapper.timeout_seconds");
     if (mapper_timeout_it != config.end() && !mapper_timeout_it->second.empty()) {
         MAPPER_TIMEOUT_SECONDS = mapper_timeout_it->second;
+    }
+
+    auto self_echo_grace_it = config.find("tts.self_echo_grace_seconds");
+    if (self_echo_grace_it != config.end() && !self_echo_grace_it->second.empty()) {
+        try {
+            SELF_ECHO_GRACE_SECONDS = std::stod(self_echo_grace_it->second);
+        } catch (const std::exception&) {
+            // Keep the default on an invalid value.
+        }
     }
 
     if (!missing_keys.empty()) {
@@ -1144,7 +1156,8 @@ int main(int argc, char* argv[]) {
             // while the mic could still be hearing it, then hold a short
             // extra grace period for ASR pipeline latency.
             speak_text(commands_message, /*wait_for_completion=*/true);
-            mute_self_echo_for(std::chrono::milliseconds(POST_SPEECH_GRACE_MS));
+            mute_self_echo_for(std::chrono::milliseconds(
+                static_cast<int64_t>(SELF_ECHO_GRACE_SECONDS * 1000)));
         }
 
         if (recording_state == RecordingState::Collecting && !line_contains_start && !line_contains_stop &&
