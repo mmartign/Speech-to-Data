@@ -24,17 +24,11 @@
 //
 #pragma once
 
-// Pure logic extracted from analyze_text.cpp: no network I/O, no shelling out,
-// no dependency on the program's global config state. Kept separate so it can
-// be linked into a unit-test binary without pulling in the OpenAI client or
-// main().
-//
-// The logic is split by functional area into the analyze_text_lib_*.h/.cpp
-// modules below; this header just aggregates them for convenience of callers
-// (analyze_text.cpp) that want the whole surface.
+// INI config-file parsing extracted from analyze_text.cpp.
 
-#include "analyze_text_lib_cleanup.h"
-#include "analyze_text_lib_fhir.h"
-#include "analyze_text_lib_ini.h"
-#include "analyze_text_lib_openai.h"
-#include "analyze_text_lib_text.h"
+#include <istream>
+#include <map>
+#include <string>
+
+std::map<std::string, std::string> parse_ini_stream(std::istream& input);
+std::map<std::string, std::string> parse_ini(const std::string& filename);

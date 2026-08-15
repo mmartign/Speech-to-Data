@@ -24,17 +24,9 @@
 //
 #pragma once
 
-// Pure logic extracted from analyze_text.cpp: no network I/O, no shelling out,
-// no dependency on the program's global config state. Kept separate so it can
-// be linked into a unit-test binary without pulling in the OpenAI client or
-// main().
-//
-// The logic is split by functional area into the analyze_text_lib_*.h/.cpp
-// modules below; this header just aggregates them for convenience of callers
-// (analyze_text.cpp) that want the whole surface.
+// Shared `json` alias for the analyze_text_lib_fhir and analyze_text_lib_openai
+// modules, which both operate on nlohmann::json values.
 
-#include "analyze_text_lib_cleanup.h"
-#include "analyze_text_lib_fhir.h"
-#include "analyze_text_lib_ini.h"
-#include "analyze_text_lib_openai.h"
-#include "analyze_text_lib_text.h"
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;

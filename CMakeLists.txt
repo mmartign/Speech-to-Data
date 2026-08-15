@@ -35,7 +35,14 @@ if(NOT EXISTS "${OPENAI_CPP_INCLUDE_DIR}/openai.hpp")
 endif()
 
 # ===== analyze_text.exe =====
-add_executable(analyze_text analyze_text.cpp analyze_text_lib.cpp)
+set(ANALYZE_TEXT_LIB_SOURCES
+    analyze_text_lib_text.cpp
+    analyze_text_lib_ini.cpp
+    analyze_text_lib_cleanup.cpp
+    analyze_text_lib_fhir.cpp
+    analyze_text_lib_openai.cpp
+)
+add_executable(analyze_text analyze_text.cpp ${ANALYZE_TEXT_LIB_SOURCES})
 
 target_include_directories(analyze_text PRIVATE
     "${OPENAI_CPP_INCLUDE_DIR}"
@@ -77,7 +84,12 @@ endif()
 target_link_curl(analyze_text)
 
 # ===== transcribe_audio.exe =====
-add_executable(transcribe_audio transcribe_audio.cpp transcribe_audio_lib.cpp)
+set(TRANSCRIBE_AUDIO_LIB_SOURCES
+    transcribe_audio_lib_repetition.cpp
+    transcribe_audio_lib_text.cpp
+    transcribe_audio_lib_json.cpp
+)
+add_executable(transcribe_audio transcribe_audio.cpp ${TRANSCRIBE_AUDIO_LIB_SOURCES})
 
 # Cache variables let you adjust paths from cmake -D...=...
 set(PORTAUDIO_INCLUDE "/opt/local/include" CACHE PATH "PortAudio include dir")
@@ -152,8 +164,12 @@ if(BUILD_TESTING)
   FetchContent_MakeAvailable(Catch2)
 
   add_executable(analyze_text_tests
-      analyze_text_lib.cpp
-      tests/test_analyze_text_lib.cpp
+      ${ANALYZE_TEXT_LIB_SOURCES}
+      tests/test_analyze_text_lib_text.cpp
+      tests/test_analyze_text_lib_ini.cpp
+      tests/test_analyze_text_lib_cleanup.cpp
+      tests/test_analyze_text_lib_fhir.cpp
+      tests/test_analyze_text_lib_openai.cpp
   )
   target_include_directories(analyze_text_tests PRIVATE
       "${OPENAI_CPP_INCLUDE_DIR}"
@@ -165,8 +181,10 @@ if(BUILD_TESTING)
   # transcribe_audio_lib has no PortAudio/whisper.cpp/Boost dependency, so this
   # test binary builds without any of transcribe_audio.exe's heavier setup.
   add_executable(transcribe_audio_tests
-      transcribe_audio_lib.cpp
-      tests/test_transcribe_audio_lib.cpp
+      ${TRANSCRIBE_AUDIO_LIB_SOURCES}
+      tests/test_transcribe_audio_lib_repetition.cpp
+      tests/test_transcribe_audio_lib_text.cpp
+      tests/test_transcribe_audio_lib_json.cpp
   )
   target_link_libraries(transcribe_audio_tests PRIVATE Catch2::Catch2WithMain)
   set_target_properties(transcribe_audio_tests PROPERTIES

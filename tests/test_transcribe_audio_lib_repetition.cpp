@@ -24,9 +24,7 @@
 //
 #include <catch2/catch_test_macros.hpp>
 
-#include <regex>
-
-#include "../transcribe_audio_lib.h"
+#include "../transcribe_audio_lib_repetition.h"
 
 namespace {
 std::string join_words(const std::vector<std::string>& words) {
@@ -114,109 +112,4 @@ TEST_CASE("trim_excessive_repetition trims a repeated two-word phrase at the tai
     const std::string input = join_words(words);
     const std::string expected = join_words({"intro", "line", "go", "now", "go", "now"});
     CHECK(trim_excessive_repetition(input) == expected);
-}
-
-// ── Generic text helpers ─────────────────────────────────────────────────────
-
-TEST_CASE("trim removes standard whitespace characters from both ends", "[text]") {
-    CHECK(trim("  hello  ") == "hello");
-    CHECK(trim("\t\nhello\f\v") == "hello");
-    CHECK(trim("") == "");
-    CHECK(trim("   ") == "");
-}
-
-TEST_CASE("is_whisper_noise_token detects exact bracket/paren tokens", "[noise]") {
-    CHECK(is_whisper_noise_token("[BLANK_AUDIO]"));
-    CHECK(is_whisper_noise_token("(silence)"));
-    CHECK(is_whisper_noise_token("[MUSIC]"));
-    CHECK_FALSE(is_whisper_noise_token("[BLANK AUDIO]"));
-}
-
-TEST_CASE("is_whisper_noise_token detects hallucination phrases regardless of case/punctuation", "[noise]") {
-    CHECK(is_whisper_noise_token("Thank you."));
-    CHECK(is_whisper_noise_token("THANKS FOR WATCHING!"));
-    CHECK(is_whisper_noise_token("Subscribe"));
-    CHECK_FALSE(is_whisper_noise_token("The patient reports chest pain."));
-    CHECK_FALSE(is_whisper_noise_token("Thank you for your patience while we review the results."));
-}
-
-TEST_CASE("format_datetime formats as [YYYY-MM-DD HH:MM:SS]", "[text]") {
-    const auto now = std::chrono::system_clock::now();
-    const std::string formatted = format_datetime(now);
-    CHECK(std::regex_match(formatted, std::regex(R"(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\])")));
-}
-
-// ── WebSocket control-message JSON helpers ──────────────────────────────────
-
-TEST_CASE("json_escape escapes control characters and quotes", "[json]") {
-    CHECK(json_escape("plain") == "plain");
-    CHECK(json_escape("a\"b") == "a\\\"b");
-    CHECK(json_escape("a\\b") == "a\\\\b");
-    CHECK(json_escape("line1\nline2") == "line1\\nline2");
-    CHECK(json_escape(std::string(1, '\x01')) == "\\u0001");
-}
-
-TEST_CASE("skip_json_whitespace advances past spaces and stops at content", "[json]") {
-    CHECK(skip_json_whitespace("   x", 0) == 3);
-    CHECK(skip_json_whitespace("x", 0) == 0);
-    CHECK(skip_json_whitespace("   ", 0) == 3);
-}
-
-TEST_CASE("parse_json_quoted_string parses simple and escaped strings", "[json]") {
-    size_t pos = 0;
-    auto result = parse_json_quoted_string("\"hello\"", pos);
-    REQUIRE(result.has_value());
-    CHECK(*result == "hello");
-
-    pos = 0;
-    result = parse_json_quoted_string(R"("a\"b")", pos);
-    REQUIRE(result.has_value());
-    CHECK(*result == "a\"b");
-
-    pos = 0;
-    CHECK_FALSE(parse_json_quoted_string("no quotes here", pos).has_value());
-
-    pos = 0;
-    CHECK_FALSE(parse_json_quoted_string("\"unterminated", pos).has_value());
-}
-
-TEST_CASE("extract_json_string_field finds a flat string field", "[json]") {
-    const std::string msg = R"({"type":"start","sessionId":"abc123"})";
-    CHECK(extract_json_string_field(msg, "type") == "start");
-    CHECK(extract_json_string_field(msg, "sessionId") == "abc123");
-    CHECK(extract_json_string_field(msg, "missing").empty());
-}
-
-TEST_CASE("extract_json_int_field parses integers and falls back otherwise", "[json]") {
-    const std::string msg = R"({"sampleRate":16000,"channels":-1})";
-    CHECK(extract_json_int_field(msg, "sampleRate", -1) == 16000);
-    CHECK(extract_json_int_field(msg, "channels", 0) == -1);
-    CHECK(extract_json_int_field(msg, "missing", 42) == 42);
-}
-
-TEST_CASE("ascii_lower_copy lowercases ASCII letters only", "[json]") {
-    CHECK(ascii_lower_copy("MiXeD Case 123") == "mixed case 123");
-}
-
-TEST_CASE("json_value_delimiter recognizes JSON value terminators", "[json]") {
-    CHECK(json_value_delimiter(','));
-    CHECK(json_value_delimiter('}'));
-    CHECK(json_value_delimiter(']'));
-    CHECK(json_value_delimiter(' '));
-    CHECK_FALSE(json_value_delimiter('a'));
-}
-
-TEST_CASE("extract_json_bool_field accepts real booleans, numerics, and string forms", "[json]") {
-    CHECK(extract_json_bool_field(R"({"timestamp":true})", "timestamp", false));
-    CHECK_FALSE(extract_json_bool_field(R"({"timestamp":false})", "timestamp", true));
-    CHECK(extract_json_bool_field(R"({"timestamp":1})", "timestamp", false));
-    CHECK(extract_json_bool_field(R"({"timestamp":"yes"})", "timestamp", false));
-    CHECK_FALSE(extract_json_bool_field(R"({"timestamp":"off"})", "timestamp", true));
-    CHECK(extract_json_bool_field(R"({})", "missing", true));
-}
-
-TEST_CASE("json_message_type_is matches the type field", "[json]") {
-    const std::string msg = R"({"type":"stop"})";
-    CHECK(json_message_type_is(msg, "stop"));
-    CHECK_FALSE(json_message_type_is(msg, "start"));
 }

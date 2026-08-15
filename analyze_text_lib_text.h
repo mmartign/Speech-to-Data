@@ -24,17 +24,15 @@
 //
 #pragma once
 
-// Pure logic extracted from analyze_text.cpp: no network I/O, no shelling out,
-// no dependency on the program's global config state. Kept separate so it can
-// be linked into a unit-test binary without pulling in the OpenAI client or
-// main().
-//
-// The logic is split by functional area into the analyze_text_lib_*.h/.cpp
-// modules below; this header just aggregates them for convenience of callers
-// (analyze_text.cpp) that want the whole surface.
+// Text / config helpers extracted from analyze_text.cpp: no network I/O, no
+// shelling out, no dependency on the program's global config state.
 
-#include "analyze_text_lib_cleanup.h"
-#include "analyze_text_lib_fhir.h"
-#include "analyze_text_lib_ini.h"
-#include "analyze_text_lib_openai.h"
-#include "analyze_text_lib_text.h"
+#include <string>
+#include <vector>
+
+std::string strip_trailing_newlines(std::string text);
+std::string trim_whitespace(std::string text);
+std::string ensure_trailing_slash(std::string url);
+std::vector<std::string> split_config_list(const std::string& value);
+std::string escape_for_single_quotes(const std::string& text);
+bool contains_substring(const std::string& str, const std::string& sub);

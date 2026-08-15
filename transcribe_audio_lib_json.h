@@ -24,17 +24,20 @@
 //
 #pragma once
 
-// Pure logic extracted from analyze_text.cpp: no network I/O, no shelling out,
-// no dependency on the program's global config state. Kept separate so it can
-// be linked into a unit-test binary without pulling in the OpenAI client or
-// main().
-//
-// The logic is split by functional area into the analyze_text_lib_*.h/.cpp
-// modules below; this header just aggregates them for convenience of callers
-// (analyze_text.cpp) that want the whole surface.
+// WebSocket control-message JSON helpers (flat, shallow parser) extracted
+// from transcribe_audio.cpp.
 
-#include "analyze_text_lib_cleanup.h"
-#include "analyze_text_lib_fhir.h"
-#include "analyze_text_lib_ini.h"
-#include "analyze_text_lib_openai.h"
-#include "analyze_text_lib_text.h"
+#include <cstddef>
+#include <optional>
+#include <string>
+
+std::string json_escape(const std::string& input);
+size_t skip_json_whitespace(const std::string& json, size_t pos);
+std::optional<std::string> parse_json_quoted_string(const std::string& json, size_t& pos);
+std::string extract_json_string_field(const std::string& json, const std::string& field);
+int extract_json_int_field(const std::string& json, const std::string& field, int fallback);
+std::string ascii_lower_copy(std::string s);
+std::string trim_ascii_whitespace(std::string s);
+bool json_value_delimiter(char c);
+bool extract_json_bool_field(const std::string& json, const std::string& field, bool fallback);
+bool json_message_type_is(const std::string& json, const char* expected);

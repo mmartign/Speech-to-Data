@@ -24,17 +24,11 @@
 //
 #pragma once
 
-// Pure logic extracted from analyze_text.cpp: no network I/O, no shelling out,
-// no dependency on the program's global config state. Kept separate so it can
-// be linked into a unit-test binary without pulling in the OpenAI client or
-// main().
-//
-// The logic is split by functional area into the analyze_text_lib_*.h/.cpp
-// modules below; this header just aggregates them for convenience of callers
-// (analyze_text.cpp) that want the whole surface.
+// Generic text helpers extracted from transcribe_audio.cpp.
 
-#include "analyze_text_lib_cleanup.h"
-#include "analyze_text_lib_fhir.h"
-#include "analyze_text_lib_ini.h"
-#include "analyze_text_lib_openai.h"
-#include "analyze_text_lib_text.h"
+#include <chrono>
+#include <string>
+
+std::string trim(const std::string& str);
+bool is_whisper_noise_token(const std::string& text);
+std::string format_datetime(const std::chrono::time_point<std::chrono::system_clock>& tp);

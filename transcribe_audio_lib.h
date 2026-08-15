@@ -27,42 +27,11 @@
 // Pure logic extracted from transcribe_audio.cpp: no PortAudio, no whisper.cpp,
 // no Boost, no filesystem/network I/O. Kept separate so it can be linked into
 // a unit-test binary without pulling in any of those heavy dependencies.
+//
+// The logic is split by functional area into the transcribe_audio_lib_*.h/.cpp
+// modules below; this header just aggregates them for convenience of callers
+// (transcribe_audio.cpp) that want the whole surface.
 
-#include <chrono>
-#include <cstddef>
-#include <optional>
-#include <string>
-#include <vector>
-
-// ── Transcript word / repetition-trimming helpers ───────────────────────────
-struct TranscriptWordSpan {
-    size_t begin = 0;
-    size_t end = 0;
-    std::string normalized;
-};
-
-bool transcript_word_byte(unsigned char c);
-std::string normalize_transcript_word(const std::string& word);
-std::vector<TranscriptWordSpan> extract_transcript_words(const std::string& text);
-std::string trim_ascii_edges_copy(const std::string& text);
-bool repeated_word_sequence_equal(const std::vector<TranscriptWordSpan>& words,
-                                   size_t lhs, size_t rhs, size_t count);
-std::optional<size_t> find_repetitive_tail_trim_offset(const std::vector<TranscriptWordSpan>& words);
-std::string trim_excessive_repetition(const std::string& text);
-
-// ── Generic text helpers ─────────────────────────────────────────────────────
-std::string trim(const std::string& str);
-bool is_whisper_noise_token(const std::string& text);
-std::string format_datetime(const std::chrono::time_point<std::chrono::system_clock>& tp);
-
-// ── WebSocket control-message JSON helpers (flat, shallow parser) ──────────
-std::string json_escape(const std::string& input);
-size_t skip_json_whitespace(const std::string& json, size_t pos);
-std::optional<std::string> parse_json_quoted_string(const std::string& json, size_t& pos);
-std::string extract_json_string_field(const std::string& json, const std::string& field);
-int extract_json_int_field(const std::string& json, const std::string& field, int fallback);
-std::string ascii_lower_copy(std::string s);
-std::string trim_ascii_whitespace(std::string s);
-bool json_value_delimiter(char c);
-bool extract_json_bool_field(const std::string& json, const std::string& field, bool fallback);
-bool json_message_type_is(const std::string& json, const char* expected);
+#include "transcribe_audio_lib_json.h"
+#include "transcribe_audio_lib_repetition.h"
+#include "transcribe_audio_lib_text.h"
