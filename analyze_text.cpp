@@ -458,7 +458,7 @@ std::string revise_fhir_bundle_in_response(std::string response_text,
     return response_text;
 }
 
-void speak_text(const std::string& text) {
+void speak_text(const std::string& text, bool wait_for_completion = false) {
     std::string trimmed = strip_trailing_newlines(text);
     if (trimmed.empty()) {
         return;
@@ -467,7 +467,10 @@ void speak_text(const std::string& text) {
     trimmed = "SI-Listener Assistant: " + trimmed;
 
     const std::string escaped = escape_for_single_quotes(trimmed);
-    const std::string cmd = TTS_COMMAND + " '" + escaped + "' >/dev/null 2>&1 &";
+    std::string cmd = TTS_COMMAND + " '" + escaped + "' >/dev/null 2>&1";
+    if (!wait_for_completion) {
+        cmd += " &";
+    }
 
     // TTS backend is shared; avoid overlapping command writes.
     std::lock_guard<std::mutex> lock(tts_mutex);
@@ -483,16 +486,16 @@ void speak_feedback(const std::string& text) {
     speak_text(text);
 }
 
-// Suppress trigger detection for roughly as long as `spoken_text` takes to
-// speak, so the microphone hearing the assistant recite trigger phrases
-// (e.g. via list_commands) doesn't cause it to act on its own announcement.
-void mute_self_echo(const std::string& spoken_text) {
-    const size_t word_count = std::count(spoken_text.begin(), spoken_text.end(), ' ') + 1;
-    constexpr double WORDS_PER_SECOND = 2.5;  // ~150 words/minute spoken rate
-    constexpr double STARTUP_LATENCY_SECONDS = 0.75;
-    const double estimated_seconds = STARTUP_LATENCY_SECONDS + static_cast<double>(word_count) / WORDS_PER_SECOND;
-    const auto mute_until = std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(static_cast<int64_t>(estimated_seconds * 1000));
+// After the mic could plausibly have heard the assistant speak (e.g. the
+// list_commands announcement, which recites every trigger phrase verbatim),
+// suppress trigger detection for a short grace period. This is on top of
+// blocking through the TTS call itself; the grace period absorbs the extra
+// latency of the transcribe_audio -> ASR pipeline still emitting a trailing
+// line for audio it captured just before playback ended.
+constexpr int64_t POST_SPEECH_GRACE_MS = 1000;
+
+void mute_self_echo_for(std::chrono::milliseconds duration) {
+    const auto mute_until = std::chrono::steady_clock::now() + duration;
     const int64_t mute_until_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         mute_until.time_since_epoch()).count();
 
@@ -1134,11 +1137,14 @@ int main(int argc, char* argv[]) {
                          << TRIGGER_STATUS << ", " << TRIGGER_PAUSE << ", " << TRIGGER_RESUME << ", "
                          << TRIGGER_LIST_COMMANDS << ".\n";
             const std::string commands_message = commands_oss.str();
-            // The response recites every trigger phrase verbatim; briefly
-            // ignore incoming lines so the mic hearing it played back doesn't
-            // re-trigger those same commands.
-            mute_self_echo(commands_message);
-            say_info(commands_message);
+            std::cout << commands_message;
+            // The response recites every trigger phrase verbatim. Block here
+            // until playback has actually finished (rather than estimating
+            // how long it will take) so the main loop isn't reading stdin
+            // while the mic could still be hearing it, then hold a short
+            // extra grace period for ASR pipeline latency.
+            speak_text(commands_message, /*wait_for_completion=*/true);
+            mute_self_echo_for(std::chrono::milliseconds(POST_SPEECH_GRACE_MS));
         }
 
         if (recording_state == RecordingState::Collecting && !line_contains_start && !line_contains_stop &&
