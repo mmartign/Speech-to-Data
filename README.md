@@ -213,7 +213,7 @@ Optional keys:
    - `discard` — clear the current recording and stop, without any AI call.
    - `repeat` — replay the last spoken feedback (summary, temp-check response, or help suggestion).
    - `status` — report whether recording is on, off, or paused, and how many analyses are currently running.
-   - `list_commands` — speak back the list of all configured voice command phrases.
+   - `list_commands` — speak back the list of all configured voice command phrases. Since this response recites every trigger phrase verbatim, incoming lines are briefly ignored afterward so the mic hearing it played back doesn't re-trigger those same commands.
 3. On stop, submits collected text to the LLM using the configured prompt and optionally augments with knowledge base content.
 4. Strips internal model reasoning tags (`<unused…>`) from the response before output.
 5. Detects any FHIR Bundle in the LLM response and automatically invokes `deterministic_fhir_mapper.exe` to normalize it.

@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <utility>
 #include <cctype>
+#include <chrono>
 #include <openai.hpp>
 
 #include "analyze_text_lib.h"
@@ -76,6 +77,7 @@ std::atomic<int> active_analyses{0};
 std::mutex tts_mutex;
 std::mutex feedback_mutex;
 std::string last_feedback_message;
+std::atomic<int64_t> self_echo_mute_until_ms{0};
 std::once_flag openai_init_flag;
 bool check_fhir = false;
 bool no_analysis_summary = false;
@@ -479,6 +481,31 @@ void speak_feedback(const std::string& text) {
         last_feedback_message = text;
     }
     speak_text(text);
+}
+
+// Suppress trigger detection for roughly as long as `spoken_text` takes to
+// speak, so the microphone hearing the assistant recite trigger phrases
+// (e.g. via list_commands) doesn't cause it to act on its own announcement.
+void mute_self_echo(const std::string& spoken_text) {
+    const size_t word_count = std::count(spoken_text.begin(), spoken_text.end(), ' ') + 1;
+    constexpr double WORDS_PER_SECOND = 2.5;  // ~150 words/minute spoken rate
+    constexpr double STARTUP_LATENCY_SECONDS = 0.75;
+    const double estimated_seconds = STARTUP_LATENCY_SECONDS + static_cast<double>(word_count) / WORDS_PER_SECOND;
+    const auto mute_until = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(static_cast<int64_t>(estimated_seconds * 1000));
+    const int64_t mute_until_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        mute_until.time_since_epoch()).count();
+
+    // Extend the mute window rather than shortening an already-longer one.
+    int64_t previous = self_echo_mute_until_ms.load();
+    while (mute_until_ms > previous &&
+           !self_echo_mute_until_ms.compare_exchange_weak(previous, mute_until_ms)) {}
+}
+
+bool is_self_echo_muted() {
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now_ms < self_echo_mute_until_ms.load();
 }
 
 void say_info(const std::string& message) {
@@ -970,6 +997,13 @@ int main(int argc, char* argv[]) {
     while (std::getline(std::cin, line)) {
         std::cout << line << std::endl;
 
+        if (is_self_echo_muted()) {
+            // Still within the window where the mic may be picking up our
+            // own list_commands announcement; ignore it rather than acting
+            // on it or appending it to the transcript.
+            continue;
+        }
+
         std::string lower_line = line;
         std::transform(lower_line.begin(), lower_line.end(), lower_line.begin(), ::tolower);
 
@@ -1099,7 +1133,12 @@ int main(int argc, char* argv[]) {
                          << TRIGGER_HELP << ", " << TRIGGER_DISCARD << ", " << TRIGGER_REPEAT << ", "
                          << TRIGGER_STATUS << ", " << TRIGGER_PAUSE << ", " << TRIGGER_RESUME << ", "
                          << TRIGGER_LIST_COMMANDS << ".\n";
-            say_info(commands_oss.str());
+            const std::string commands_message = commands_oss.str();
+            // The response recites every trigger phrase verbatim; briefly
+            // ignore incoming lines so the mic hearing it played back doesn't
+            // re-trigger those same commands.
+            mute_self_echo(commands_message);
+            say_info(commands_message);
         }
 
         if (recording_state == RecordingState::Collecting && !line_contains_start && !line_contains_stop &&
