@@ -59,6 +59,7 @@ std::string TRIGGER_REPEAT;
 std::string TRIGGER_STATUS;
 std::string TRIGGER_PAUSE;
 std::string TRIGGER_RESUME;
+std::string TRIGGER_LIST_COMMANDS;
 std::string TTS_COMMAND;
 bool MAPPER_NETWORK_ENABLED = true;
 std::string MAPPER_CACHE_DIR = "./terminology_cache";
@@ -130,6 +131,7 @@ enum MsgKey {
     MSG_RECORDING_ALREADY_PAUSED,
     MSG_RECORDING_RESUMED,
     MSG_RECORDING_NOT_PAUSED,
+    MSG_LIST_COMMANDS_HEADER,
     MSG_COUNT
 };
 
@@ -309,6 +311,10 @@ static const char* MESSAGES[MSG_COUNT][3] = {
     {"Recording is not paused ------------------->>>\n",
      "La registrazione non è in pausa ------------------->>>\n",
      "L'enregistrement n'est pas en pause ------------------->>>\n"},
+    /* MSG_LIST_COMMANDS_HEADER */
+    {"Available voice commands: ",
+     "Comandi vocali disponibili: ",
+     "Commandes vocales disponibles : "},
 };
 
 static const char* tr(MsgKey key) {
@@ -521,6 +527,7 @@ bool load_config(const std::string& path) {
     require_value("triggers.status", TRIGGER_STATUS);
     require_value("triggers.pause", TRIGGER_PAUSE);
     require_value("triggers.resume", TRIGGER_RESUME);
+    require_value("triggers.list_commands", TRIGGER_LIST_COMMANDS);
     require_value("tts.command", TTS_COMMAND);
 
     auto kb_it = config.find("analysis.knowledge_base_ids");
@@ -579,6 +586,7 @@ bool load_config(const std::string& path) {
     std::transform(TRIGGER_STATUS.begin(), TRIGGER_STATUS.end(), TRIGGER_STATUS.begin(), ::tolower);
     std::transform(TRIGGER_PAUSE.begin(), TRIGGER_PAUSE.end(), TRIGGER_PAUSE.begin(), ::tolower);
     std::transform(TRIGGER_RESUME.begin(), TRIGGER_RESUME.end(), TRIGGER_RESUME.begin(), ::tolower);
+    std::transform(TRIGGER_LIST_COMMANDS.begin(), TRIGGER_LIST_COMMANDS.end(), TRIGGER_LIST_COMMANDS.begin(), ::tolower);
     OPENWEBUI_URL = ensure_trailing_slash(OPENWEBUI_URL);
 
     if (KNOWLEDGE_BASE_IDS.empty()) {
@@ -884,7 +892,7 @@ static void print_help(const char* prog) {
         "    [openai]   base_url, api_key, model_name\n"
         "    [prompts]  prompt, temp_prompt, help_prompt\n"
         "    [triggers] start, stop, temp_check, help, discard, repeat, status,\n"
-        "               pause, resume\n"
+        "               pause, resume, list_commands\n"
         "    [tts]      command\n"
         "  Optional keys:\n"
         "    [analysis]             knowledge_base_ids\n"
@@ -910,6 +918,7 @@ static void print_help(const char* prog) {
         "             temporary-check response, or help suggestion).\n"
         "  status     Report whether recording is on, off, or paused, and how many\n"
         "             analyses are currently running.\n"
+        "  list_commands  Speak the list of all configured voice command phrases.\n"
         "\n"
         "Exit status:\n"
         "  0  Normal exit (EOF on stdin).\n"
@@ -973,6 +982,7 @@ int main(int argc, char* argv[]) {
         const bool line_contains_status = contains_substring(lower_line, TRIGGER_STATUS);
         const bool line_contains_pause = contains_substring(lower_line, TRIGGER_PAUSE);
         const bool line_contains_resume = contains_substring(lower_line, TRIGGER_RESUME);
+        const bool line_contains_list_commands = contains_substring(lower_line, TRIGGER_LIST_COMMANDS);
 
         if (line_contains_start) {
             if (recording_state != RecordingState::Idle) {
@@ -1082,9 +1092,20 @@ int main(int argc, char* argv[]) {
             say_info(status_oss.str());
         }
 
+        if (line_contains_list_commands) {
+            std::ostringstream commands_oss;
+            commands_oss << tr(MSG_LIST_COMMANDS_HEADER)
+                         << TRIGGER_START << ", " << TRIGGER_STOP << ", " << TRIGGER_TEMP_CHECK << ", "
+                         << TRIGGER_HELP << ", " << TRIGGER_DISCARD << ", " << TRIGGER_REPEAT << ", "
+                         << TRIGGER_STATUS << ", " << TRIGGER_PAUSE << ", " << TRIGGER_RESUME << ", "
+                         << TRIGGER_LIST_COMMANDS << ".\n";
+            say_info(commands_oss.str());
+        }
+
         if (recording_state == RecordingState::Collecting && !line_contains_start && !line_contains_stop &&
             !line_contains_temp_check && !line_contains_help && !line_contains_discard &&
-            !line_contains_pause && !line_contains_resume && !line_contains_repeat && !line_contains_status) {
+            !line_contains_pause && !line_contains_resume && !line_contains_repeat && !line_contains_status &&
+            !line_contains_list_commands) {
             collected_text += line + "\n";
         }
     }

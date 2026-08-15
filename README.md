@@ -189,6 +189,7 @@ Reads a continuous transcript stream from stdin, monitors configurable voice tri
 | `triggers` | `status` | Voice phrase that reports whether recording is on, off, or paused, and how many analyses are running |
 | `triggers` | `pause` | Voice phrase that temporarily stops collecting speech, without discarding what's been collected |
 | `triggers` | `resume` | Voice phrase that resumes collecting speech after a pause |
+| `triggers` | `list_commands` | Voice phrase that speaks back the list of all configured voice command phrases |
 | `tts` | `command` | Shell command used for spoken output (e.g., `espeak`) |
 
 Optional keys:
@@ -212,6 +213,7 @@ Optional keys:
    - `discard` — clear the current recording and stop, without any AI call.
    - `repeat` — replay the last spoken feedback (summary, temp-check response, or help suggestion).
    - `status` — report whether recording is on, off, or paused, and how many analyses are currently running.
+   - `list_commands` — speak back the list of all configured voice command phrases.
 3. On stop, submits collected text to the LLM using the configured prompt and optionally augments with knowledge base content.
 4. Strips internal model reasoning tags (`<unused…>`) from the response before output.
 5. Detects any FHIR Bundle in the LLM response and automatically invokes `deterministic_fhir_mapper.exe` to normalize it.
