@@ -117,6 +117,8 @@ The pipeline is composed of three compiled executables:
 [Audio Source] → transcribe_audio.exe → [Text Stream] → analyze_text.exe → [FHIR Bundle] → deterministic_fhir_mapper.exe → [Normalized Output]
 ```
 
+`analyze_text.exe` also shells out to `realtime_video_pipeline.exe` when the `camera_on`/`camera_off` voice triggers fire. That binary is **not built by this project** — it must be provided separately and placed alongside `analyze_text.exe`.
+
 ---
 
 ## `transcribe_audio.exe` — Real-Time Speech-to-Text
@@ -147,19 +149,23 @@ Performs continuous audio capture and transcription using [whisper.cpp](https://
 --input_source <mode>             microphone | file | websocket  (default: microphone)
 --energy_threshold <int>          manual VAD energy threshold (default: auto-calibrate)
 --adaptive_energy                 enable EMA-based adaptive threshold
+--adaptive_silence_fraction <f>   silence RMS fraction used before sending to Whisper (default: 0.35)
 --adaptive_hangover_chunks <int>  silence chunks before noise floor update (default: 1)
 --vad_pre_roll <float>            seconds of pre-speech audio to retain (default: 0.30)
 --record_timeout <float>          max audio chunk duration in seconds (default: 2.0)
 --phrase_timeout <float>          silence duration to end a phrase (default: 3.0)
 --language <lang>                 Whisper language code (default: en)
+--translate                       translate source speech to English instead of transcribing it
 --pipe                            enable pipe mode for downstream processing
 --timestamp                       prefix transcripts with wall-clock timestamps
 --audio_file <path>               media file to transcribe (requires --input_source file)
 --predefined_start_time "YYYY-mm-dd HH:MM:SS"  override transcript origin time
 --websocket_bind <ip>             WebSocket bind address (default: 0.0.0.0)
 --websocket_port <port>           WebSocket port (default: 8080)
+--websocket_server                enable the WebSocket server directly (legacy alias for --input_source websocket)
 --websocket_idle_timeout <sec>    idle socket timeout in seconds (default: 30)
 --websocket_send_transcripts      push transcript JSON back to WebSocket clients
+--default_microphone <name>       preferred microphone name, Linux only (see --list_microphones)
 --list_microphones                enumerate PortAudio input devices and exit
 --verbose                         print VAD diagnostics and Whisper segment scores
 ```
@@ -291,6 +297,8 @@ This produces three executables:
 1. `transcribe_audio.exe` — real-time speech-to-text
 2. `analyze_text.exe` — AI contextual analysis and FHIR extraction
 3. `deterministic_fhir_mapper.exe` — deterministic FHIR normalization
+
+The `camera_on` trigger in `analyze_text.exe` requires a separate `realtime_video_pipeline.exe` binary, not built by this CMake project, to be present in the working directory.
 
 **Additional build dependencies for `transcribe_audio.exe`:**
 
