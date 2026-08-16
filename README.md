@@ -190,6 +190,8 @@ Reads a continuous transcript stream from stdin, monitors configurable voice tri
 | `triggers` | `pause` | Voice phrase that temporarily stops collecting speech, without discarding what's been collected |
 | `triggers` | `resume` | Voice phrase that resumes collecting speech after a pause |
 | `triggers` | `list_commands` | Voice phrase that speaks back the list of all configured voice command phrases |
+| `triggers` | `camera_on` | Voice phrase that launches `realtime_video_pipeline.exe` in the background, without stopping the recording |
+| `triggers` | `camera_off` | Voice phrase that kills any running `realtime_video_pipeline.exe` process, without stopping the recording |
 | `tts` | `command` | Shell command used for spoken output (e.g., `espeak`) |
 
 Optional keys:
@@ -203,6 +205,8 @@ Optional keys:
 | `deterministic_mapper` | `loinc_user` / `loinc_pass` | LOINC FHIR credentials (optional, free registration) |
 | `deterministic_mapper` | `timeout_seconds` | HTTP timeout for terminology lookups (default: `10`) |
 | `tts` | `self_echo_grace_seconds` | Seconds to ignore transcript input after `list_commands` finishes speaking, to absorb ASR pipeline latency (default: `5`) |
+| `camera` | `camera_id` | Camera device index passed to `realtime_video_pipeline.exe` (default: `0`) |
+| `camera` | `camera_interval` | `--interval` value (seconds) passed to `realtime_video_pipeline.exe` (default: `10`) |
 
 **Workflow:**
 
@@ -215,12 +219,14 @@ Optional keys:
    - `repeat` — replay the last spoken feedback (summary, temp-check response, or help suggestion).
    - `status` — report whether recording is on, off, or paused, and how many analyses are currently running.
    - `list_commands` — speak back the list of all configured voice command phrases. Since this response recites every trigger phrase verbatim, playback blocks the input loop until it actually finishes (not an estimate), plus a short grace period afterward, so the mic hearing it played back doesn't re-trigger those same commands.
+   - `camera_on` / `camera_off` — launch or kill `realtime_video_pipeline.exe` in the background, without stopping recording. Like `temp_check`, these require an active recording session.
 3. On stop, submits collected text to the LLM using the configured prompt and optionally augments with knowledge base content.
 4. Strips internal model reasoning tags (`<unused…>`) from the response before output.
 5. Detects any FHIR Bundle in the LLM response and automatically invokes `deterministic_fhir_mapper.exe` to normalize it.
 6. Generates a concise 3-sentence spoken summary via a second LLM call, then vocalizes it using the configured TTS command.
 7. Writes full results (model used, endpoint, prompt, raw response, summary) to a timestamped file (`results_analysis<N>.txt`).
 8. Temporary-check and help-guidance snapshots are saved to `tmp_results_analysis<N>.<M>.txt` and `tmp_help_analysis<N>.<M>.txt` respectively, and spoken aloud without stopping the active recording session.
+9. `camera_on` runs `./realtime_video_pipeline.exe <camera_id> --interval <camera_interval> > video_analysis<N>.<M>.txt` in the background, using the same `<N>.<M>` numbering as temp-check and help-guidance files; `camera_off` runs `killall realtime_video_pipeline.exe`.
 
 ---
 

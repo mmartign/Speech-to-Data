@@ -61,6 +61,8 @@ std::string TRIGGER_STATUS;
 std::string TRIGGER_PAUSE;
 std::string TRIGGER_RESUME;
 std::string TRIGGER_LIST_COMMANDS;
+std::string TRIGGER_CAMERA_ON;
+std::string TRIGGER_CAMERA_OFF;
 std::string TTS_COMMAND;
 double SELF_ECHO_GRACE_SECONDS = 5.0;
 bool MAPPER_NETWORK_ENABLED = true;
@@ -69,11 +71,14 @@ std::string MAPPER_CACHE_TTL_DAYS = "7";
 std::string MAPPER_LOINC_USER;
 std::string MAPPER_LOINC_PASS;
 std::string MAPPER_TIMEOUT_SECONDS = "10";
+std::string CAMERA_ID = "0";
+std::string CAMERA_INTERVAL = "10";
 
 std::mutex analysis_mutex;
 std::atomic<int> counter_value{0};
 std::atomic<int> temp_counter_value{0};
 std::atomic<int> help_counter_value{0};
+std::atomic<int> camera_counter_value{0};
 std::atomic<int> active_analyses{0};
 std::mutex tts_mutex;
 std::mutex feedback_mutex;
@@ -135,6 +140,8 @@ enum MsgKey {
     MSG_RECORDING_RESUMED,
     MSG_RECORDING_NOT_PAUSED,
     MSG_LIST_COMMANDS_HEADER,
+    MSG_CAMERA_ON_REQUESTED,
+    MSG_CAMERA_OFF_REQUESTED,
     MSG_COUNT
 };
 
@@ -318,6 +325,14 @@ static const char* MESSAGES[MSG_COUNT][3] = {
     {"Available voice commands: ",
      "Comandi vocali disponibili: ",
      "Commandes vocales disponibles : "},
+    /* MSG_CAMERA_ON_REQUESTED */
+    {"Camera on requested ------------------->>>\n",
+     "Accensione fotocamera richiesta ------------------->>>\n",
+     "Activation de la caméra demandée ------------------->>>\n"},
+    /* MSG_CAMERA_OFF_REQUESTED */
+    {"Camera off requested ------------------->>>\n",
+     "Spegnimento fotocamera richiesto ------------------->>>\n",
+     "Désactivation de la caméra demandée ------------------->>>\n"},
 };
 
 static const char* tr(MsgKey key) {
@@ -561,6 +576,8 @@ bool load_config(const std::string& path) {
     require_value("triggers.pause", TRIGGER_PAUSE);
     require_value("triggers.resume", TRIGGER_RESUME);
     require_value("triggers.list_commands", TRIGGER_LIST_COMMANDS);
+    require_value("triggers.camera_on", TRIGGER_CAMERA_ON);
+    require_value("triggers.camera_off", TRIGGER_CAMERA_OFF);
     require_value("tts.command", TTS_COMMAND);
 
     auto kb_it = config.find("analysis.knowledge_base_ids");
@@ -608,6 +625,16 @@ bool load_config(const std::string& path) {
         }
     }
 
+    auto camera_id_it = config.find("camera.camera_id");
+    if (camera_id_it != config.end() && !camera_id_it->second.empty()) {
+        CAMERA_ID = camera_id_it->second;
+    }
+
+    auto camera_interval_it = config.find("camera.camera_interval");
+    if (camera_interval_it != config.end() && !camera_interval_it->second.empty()) {
+        CAMERA_INTERVAL = camera_interval_it->second;
+    }
+
     if (!missing_keys.empty()) {
         std::ostringstream oss;
         oss << tr(MSG_MISSING_REQUIRED_CONFIG);
@@ -629,6 +656,8 @@ bool load_config(const std::string& path) {
     std::transform(TRIGGER_PAUSE.begin(), TRIGGER_PAUSE.end(), TRIGGER_PAUSE.begin(), ::tolower);
     std::transform(TRIGGER_RESUME.begin(), TRIGGER_RESUME.end(), TRIGGER_RESUME.begin(), ::tolower);
     std::transform(TRIGGER_LIST_COMMANDS.begin(), TRIGGER_LIST_COMMANDS.end(), TRIGGER_LIST_COMMANDS.begin(), ::tolower);
+    std::transform(TRIGGER_CAMERA_ON.begin(), TRIGGER_CAMERA_ON.end(), TRIGGER_CAMERA_ON.begin(), ::tolower);
+    std::transform(TRIGGER_CAMERA_OFF.begin(), TRIGGER_CAMERA_OFF.end(), TRIGGER_CAMERA_OFF.begin(), ::tolower);
     OPENWEBUI_URL = ensure_trailing_slash(OPENWEBUI_URL);
 
     if (KNOWLEDGE_BASE_IDS.empty()) {
@@ -684,6 +713,7 @@ void analyze_text(const std::string& text) {
     const int analysis_id = ++counter_value;
     temp_counter_value = 0; // Reset temp counter for each main analysis
     help_counter_value = 0; // Reset help counter for each main analysis
+    camera_counter_value = 0; // Reset camera counter for each main analysis
     say_info(tr(MSG_ANALYSIS_STARTED_PREFIX) + std::to_string(analysis_id) + tr(MSG_ANALYSIS_STARTED_SUFFIX));
 
     const std::string filename = "results_analysis" + std::to_string(analysis_id) + ".txt";
@@ -934,12 +964,14 @@ static void print_help(const char* prog) {
         "    [openai]   base_url, api_key, model_name\n"
         "    [prompts]  prompt, temp_prompt, help_prompt\n"
         "    [triggers] start, stop, temp_check, help, discard, repeat, status,\n"
-        "               pause, resume, list_commands\n"
+        "               pause, resume, list_commands, camera_on, camera_off\n"
         "    [tts]      command\n"
         "  Optional keys:\n"
         "    [analysis]             knowledge_base_ids\n"
         "    [deterministic_mapper] network_enabled, cache_dir, cache_ttl_days,\n"
         "                           loinc_user, loinc_pass, timeout_seconds\n"
+        "    [tts]                  self_echo_grace_seconds\n"
+        "    [camera]               camera_id, camera_interval\n"
         "\n"
         "Trigger words (configured in config.ini):\n"
         "  start      Begin collecting transcribed speech.\n"
@@ -961,6 +993,12 @@ static void print_help(const char* prog) {
         "  status     Report whether recording is on, off, or paused, and how many\n"
         "             analyses are currently running.\n"
         "  list_commands  Speak the list of all configured voice command phrases.\n"
+        "  camera_on      Launch realtime_video_pipeline.exe in the background,\n"
+        "                 without stopping the recording. Requires an active\n"
+        "                 recording session, like temp_check.\n"
+        "  camera_off     Kill any running realtime_video_pipeline.exe process,\n"
+        "                 without stopping the recording. Requires an active\n"
+        "                 recording session, like temp_check.\n"
         "\n"
         "Exit status:\n"
         "  0  Normal exit (EOF on stdin).\n"
@@ -1032,6 +1070,8 @@ int main(int argc, char* argv[]) {
         const bool line_contains_pause = contains_substring(lower_line, TRIGGER_PAUSE);
         const bool line_contains_resume = contains_substring(lower_line, TRIGGER_RESUME);
         const bool line_contains_list_commands = contains_substring(lower_line, TRIGGER_LIST_COMMANDS);
+        const bool line_contains_camera_on = contains_substring(lower_line, TRIGGER_CAMERA_ON);
+        const bool line_contains_camera_off = contains_substring(lower_line, TRIGGER_CAMERA_OFF);
 
         if (line_contains_start) {
             if (recording_state != RecordingState::Idle) {
@@ -1068,6 +1108,35 @@ int main(int argc, char* argv[]) {
                 std::string snapshot = collected_text;
                 // Temp analysis runs on a snapshot while recording continues.
                 launch_analysis_thread(temp_analyze_text, std::move(snapshot));
+            }
+        }
+
+        if (line_contains_camera_on) {
+            if (recording_state == RecordingState::Idle) {
+                say_info(tr(MSG_NO_RECORDING_RUNNING));
+            } else {
+                say_info(tr(MSG_CAMERA_ON_REQUESTED));
+                const int camera_analysis_id = ++camera_counter_value;
+                // Use compound id (<main>.<camera>) so video files sort with
+                // their parent analysis, exactly like tmp_help_analysis<N>.txt.
+                const std::string camera_id_str = std::to_string(counter_value + 1) + "." +
+                                                   std::to_string(camera_analysis_id);
+                const std::string video_filename = "video_analysis" + camera_id_str + ".txt";
+
+                std::ostringstream camera_cmd;
+                camera_cmd << "./realtime_video_pipeline.exe '" << escape_for_single_quotes(CAMERA_ID)
+                           << "' --interval '" << escape_for_single_quotes(CAMERA_INTERVAL)
+                           << "' > '" << escape_for_single_quotes(video_filename) << "' &";
+                std::system(camera_cmd.str().c_str());
+            }
+        }
+
+        if (line_contains_camera_off) {
+            if (recording_state == RecordingState::Idle) {
+                say_info(tr(MSG_NO_RECORDING_RUNNING));
+            } else {
+                say_info(tr(MSG_CAMERA_OFF_REQUESTED));
+                std::system("killall realtime_video_pipeline.exe >/dev/null 2>&1");
             }
         }
 
@@ -1147,6 +1216,7 @@ int main(int argc, char* argv[]) {
                          << TRIGGER_START << ", " << TRIGGER_STOP << ", " << TRIGGER_TEMP_CHECK << ", "
                          << TRIGGER_HELP << ", " << TRIGGER_DISCARD << ", " << TRIGGER_REPEAT << ", "
                          << TRIGGER_STATUS << ", " << TRIGGER_PAUSE << ", " << TRIGGER_RESUME << ", "
+                         << TRIGGER_CAMERA_ON << ", " << TRIGGER_CAMERA_OFF << ", "
                          << TRIGGER_LIST_COMMANDS << ".\n";
             const std::string commands_message = commands_oss.str();
             std::cout << commands_message;
@@ -1163,7 +1233,7 @@ int main(int argc, char* argv[]) {
         if (recording_state == RecordingState::Collecting && !line_contains_start && !line_contains_stop &&
             !line_contains_temp_check && !line_contains_help && !line_contains_discard &&
             !line_contains_pause && !line_contains_resume && !line_contains_repeat && !line_contains_status &&
-            !line_contains_list_commands) {
+            !line_contains_list_commands && !line_contains_camera_on && !line_contains_camera_off) {
             collected_text += line + "\n";
         }
     }
