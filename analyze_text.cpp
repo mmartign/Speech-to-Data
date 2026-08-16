@@ -1058,6 +1058,11 @@ int main(int argc, char* argv[]) {
     std::string collected_text;
     RecordingState recording_state = RecordingState::Idle;
     bool camera_running = false;
+    auto stop_camera = [&]() {
+        say_info(tr(MSG_CAMERA_OFF_REQUESTED));
+        std::system("killall realtime_video_pipeline.exe >/dev/null 2>&1");
+        camera_running = false;
+    };
 
     while (std::getline(std::cin, line)) {
         std::cout << line << std::endl;
@@ -1102,6 +1107,9 @@ int main(int argc, char* argv[]) {
                 say_info(tr(MSG_ANALYSIS_RUNNING_STOP_BLOCKED));
             } else {
                 say_info(tr(MSG_RECORDING_STOPPED));
+                if (camera_running) {
+                    stop_camera();
+                }
                 std::string text_to_analyze = collected_text;
                 collected_text.clear();
                 recording_state = RecordingState::Idle;
@@ -1148,9 +1156,7 @@ int main(int argc, char* argv[]) {
             if (recording_state == RecordingState::Idle) {
                 say_info(tr(MSG_NO_RECORDING_RUNNING));
             } else {
-                say_info(tr(MSG_CAMERA_OFF_REQUESTED));
-                std::system("killall realtime_video_pipeline.exe >/dev/null 2>&1");
-                camera_running = false;
+                stop_camera();
             }
         }
 
@@ -1175,6 +1181,9 @@ int main(int argc, char* argv[]) {
                 collected_text.clear();
                 recording_state = RecordingState::Idle;
                 say_info(tr(MSG_RECORDING_DISCARDED));
+                if (camera_running) {
+                    stop_camera();
+                }
             }
         }
 

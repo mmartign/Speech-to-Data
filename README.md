@@ -212,12 +212,12 @@ Optional keys:
 
 1. Reads transcript lines from stdin (piped from `transcribe_audio.exe`).
 2. Detects trigger phrases to control the recording session:
-   - `start` / `stop` — begin collecting speech / stop and submit for full analysis.
+   - `start` / `stop` — begin collecting speech / stop and submit for full analysis. `stop` also turns the camera off if it's currently on.
    - `temp_check` / `help` — snapshot the text collected so far for an interim analysis, or an AI suggestion on what to do next, without stopping recording.
    - `pause` / `resume` — temporarily stop or resume appending speech to the collected text, without discarding it.
-   - `discard` — clear the current recording and stop, without any AI call.
+   - `discard` — clear the current recording and stop, without any AI call; also turns the camera off if it's currently on.
    - `repeat` — replay the last spoken feedback (summary, temp-check response, or help suggestion).
-   - `status` — report whether recording is on, off, or paused, and how many analyses are currently running.
+   - `status` — report whether recording is on, off, or paused, how many analyses are running, and whether the camera is on or off.
    - `list_commands` — speak back the list of all configured voice command phrases. Since this response recites every trigger phrase verbatim, playback blocks the input loop until it actually finishes (not an estimate), plus a short grace period afterward, so the mic hearing it played back doesn't re-trigger those same commands.
    - `camera_on` / `camera_off` — launch or kill `realtime_video_pipeline.exe` in the background, without stopping recording. Like `temp_check`, these require an active recording session.
 3. On stop, submits collected text to the LLM using the configured prompt and optionally augments with knowledge base content.
