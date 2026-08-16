@@ -186,7 +186,7 @@ Reads a continuous transcript stream from stdin, monitors configurable voice tri
 | `triggers` | `help` | Voice phrase requesting AI guidance on what to do next, based on a snapshot of the recording so far |
 | `triggers` | `discard` | Voice phrase that discards the current recording and stops, without any AI call |
 | `triggers` | `repeat` | Voice phrase that replays the last spoken feedback (summary, temp-check response, or help suggestion) |
-| `triggers` | `status` | Voice phrase that reports whether recording is on, off, or paused, and how many analyses are running |
+| `triggers` | `status` | Voice phrase that reports whether recording is on, off, or paused, how many analyses are running, and whether the camera is on or off |
 | `triggers` | `pause` | Voice phrase that temporarily stops collecting speech, without discarding what's been collected |
 | `triggers` | `resume` | Voice phrase that resumes collecting speech after a pause |
 | `triggers` | `list_commands` | Voice phrase that speaks back the list of all configured voice command phrases |

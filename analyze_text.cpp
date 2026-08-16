@@ -142,6 +142,9 @@ enum MsgKey {
     MSG_LIST_COMMANDS_HEADER,
     MSG_CAMERA_ON_REQUESTED,
     MSG_CAMERA_OFF_REQUESTED,
+    MSG_STATUS_CAMERA_MIDDLE,
+    MSG_STATUS_CAMERA_ON,
+    MSG_STATUS_CAMERA_OFF,
     MSG_COUNT
 };
 
@@ -327,12 +330,20 @@ static const char* MESSAGES[MSG_COUNT][3] = {
      "Commandes vocales disponibles : "},
     /* MSG_CAMERA_ON_REQUESTED */
     {"Camera on requested ------------------->>>\n",
-     "Accensione fotocamera richiesta ------------------->>>\n",
+     "Accensione camera richiesta ------------------->>>\n",
      "Activation de la caméra demandée ------------------->>>\n"},
     /* MSG_CAMERA_OFF_REQUESTED */
     {"Camera off requested ------------------->>>\n",
-     "Spegnimento fotocamera richiesto ------------------->>>\n",
+     "Spegnimento camera richiesto ------------------->>>\n",
      "Désactivation de la caméra demandée ------------------->>>\n"},
+    /* MSG_STATUS_CAMERA_MIDDLE */
+    {". Camera is ",
+     ". Camera: ",
+     ". Caméra : "},
+    /* MSG_STATUS_CAMERA_ON */
+    {"on", "accesa", "allumée"},
+    /* MSG_STATUS_CAMERA_OFF */
+    {"off", "spenta", "éteinte"},
 };
 
 static const char* tr(MsgKey key) {
@@ -1046,6 +1057,7 @@ int main(int argc, char* argv[]) {
     std::string line;
     std::string collected_text;
     RecordingState recording_state = RecordingState::Idle;
+    bool camera_running = false;
 
     while (std::getline(std::cin, line)) {
         std::cout << line << std::endl;
@@ -1128,6 +1140,7 @@ int main(int argc, char* argv[]) {
                            << "' --interval '" << escape_for_single_quotes(CAMERA_INTERVAL)
                            << "' > '" << escape_for_single_quotes(video_filename) << "' &";
                 std::system(camera_cmd.str().c_str());
+                camera_running = true;
             }
         }
 
@@ -1137,6 +1150,7 @@ int main(int argc, char* argv[]) {
             } else {
                 say_info(tr(MSG_CAMERA_OFF_REQUESTED));
                 std::system("killall realtime_video_pipeline.exe >/dev/null 2>&1");
+                camera_running = false;
             }
         }
 
@@ -1204,9 +1218,10 @@ int main(int argc, char* argv[]) {
             const char* state_str = (recording_state == RecordingState::Collecting) ? tr(MSG_STATUS_STATE_COLLECTING)
                                    : (recording_state == RecordingState::Paused) ? tr(MSG_STATUS_STATE_PAUSED)
                                    : tr(MSG_STATUS_STATE_IDLE);
+            const char* camera_state_str = camera_running ? tr(MSG_STATUS_CAMERA_ON) : tr(MSG_STATUS_CAMERA_OFF);
             std::ostringstream status_oss;
             status_oss << tr(MSG_STATUS_HEADER) << state_str << tr(MSG_STATUS_ANALYSES_MIDDLE)
-                       << active_analyses.load() << ".\n";
+                       << active_analyses.load() << tr(MSG_STATUS_CAMERA_MIDDLE) << camera_state_str << ".\n";
             say_info(status_oss.str());
         }
 
